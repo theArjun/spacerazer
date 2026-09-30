@@ -3,7 +3,9 @@
 #
 # Trigger: push a tag matching the workspace version, e.g.
 #   git tag v0.1.0 && git push origin v0.1.0
-# or run it by hand from the Actions tab with an existing tag.
+# or run it by hand from the Actions tab ("Run workflow"). A manual run with
+# an existing tag rebuilds that tag; with a new tag it builds the branch you
+# chose and creates the tag on that commit when publishing.
 #
 # macOS signing and notarization are optional. Without the APPLE_* secrets
 # the app is ad-hoc signed; users open it the first time with right-click →
@@ -21,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build and publish, e.g. v0.1.0"
+        description: "Release tag, e.g. v0.1.0. Created on the selected branch if it does not exist."
         required: true
 
 permissions:
@@ -37,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      sha: ${{ steps.ref.outputs.sha }}
     steps:
       - name: Tag must look like vMAJOR.MINOR.PATCH
         run: |
@@ -44,9 +47,21 @@ jobs:
             echo "::error::'$TAG' is not a version tag like v0.1.0"
             exit 1
           fi
+      # Full history and tags, so we can tell whether the tag already exists.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - id: ref
+        name: Pick the commit to build
+        run: |
+          if sha=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}"); then
+            echo "Building existing tag $TAG at $sha"
+          else
+            sha="$GITHUB_SHA"
+            echo "Tag $TAG does not exist yet; building $GITHUB_REF_NAME at $sha. The tag will be created on publish."
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          git checkout --quiet "$sha"
       - id: v
         name: Tag must match the workspace version
         run: |
@@ -78,7 +93,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.version.outputs.sha }}
       - name: System libraries for the GUI
         run: |
           sudo apt-get update
@@ -123,7 +138,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.version.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
@@ -153,7 +168,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.version.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -250,6 +265,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
+          target_commitish: ${{ needs.version.outputs.sha }}
           name: SpaceRazer ${{ needs.version.outputs.version }}
           generate_release_notes: true
           prerelease: ${{ contains(env.TAG, '-') }}
