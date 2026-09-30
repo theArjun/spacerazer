@@ -34,6 +34,14 @@ serde_json.workspace = true
 toml.workspace = true
 image.workspace = true
 
+# Native menu bars: the global menu on macOS, the window menu on Windows.
+# Linux keeps the in-window menu bar (no GTK dependency).
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+muda = { version = "0.21", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+
 [package.metadata.deb]
 name = "spacerazer"
 maintainer = "Arjun Adhikari <33110520+theArjun@users.noreply.github.com>"

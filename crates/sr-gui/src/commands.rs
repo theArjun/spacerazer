@@ -310,6 +310,8 @@ pub fn handle_hotkeys(app: &mut App, ctx: &egui::Context) {
         .filter(|(c, _)| !typing || c.allowed_while_typing())
         // Delete alone is handled by the Space Map's own keyboard focus.
         .filter(|(c, _)| *c != Cmd::StageSelection)
+        // The macOS menu bar receives its key equivalents first.
+        .filter(|(c, _)| !(app.has_native_menu() && native_handles(*c)))
         .collect();
     cmds.sort_by_key(|(_, s)| std::cmp::Reverse(modifier_count(s.modifiers)));
     let mut fired = Vec::new();
@@ -326,6 +328,16 @@ pub fn handle_hotkeys(app: &mut App, ctx: &egui::Context) {
             continue;
         }
         run(app, ctx, c);
+    }
+}
+
+fn native_handles(c: Cmd) -> bool {
+    #[cfg(any(target_os = "macos", windows))]
+    return crate::native_menu::handles_hotkey(c);
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = c;
+        false
     }
 }
 

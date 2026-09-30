@@ -113,6 +113,8 @@ pub struct App {
     /// Dev aid: `SPACERAZER_SCREENSHOT=<png>` captures the window after
     /// `SPACERAZER_SCREENSHOT_DELAY` seconds (default 5) and exits.
     screenshot: Option<(PathBuf, f64, bool)>,
+    #[cfg(any(target_os = "macos", windows))]
+    native_menu: Option<crate::native_menu::NativeMenu>,
 }
 
 impl App {
@@ -173,6 +175,8 @@ impl App {
                     .unwrap_or(5.0);
                 (PathBuf::from(p), delay, false)
             }),
+            #[cfg(any(target_os = "macos", windows))]
+            native_menu: crate::native_menu::NativeMenu::install(cc),
         };
         crate::theme::install(&cc.egui_ctx);
         app.apply_theme(&cc.egui_ctx);
@@ -636,13 +640,43 @@ impl App {
 
     // ------------------------------------------------------------------- ui
 
+    /// True when the platform menu bar is in use (macOS, Windows).
+    pub fn has_native_menu(&self) -> bool {
+        #[cfg(any(target_os = "macos", windows))]
+        return self.native_menu.is_some();
+        #[cfg(not(any(target_os = "macos", windows)))]
+        false
+    }
+
+    fn native_menu_frame(&mut self, ctx: &egui::Context) {
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            let cmds = self
+                .native_menu
+                .as_ref()
+                .map(|m| m.take_commands())
+                .unwrap_or_default();
+            for c in cmds {
+                crate::commands::run(self, ctx, c);
+            }
+            if let Some(mut m) = self.native_menu.take() {
+                m.sync_enabled(self);
+                self.native_menu = Some(m);
+            }
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let _ = ctx;
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let p = theme::of(ui);
         ui.horizontal(|ui| {
             ui.add_space(6.0);
             ui.label(RichText::new("SpaceRazer").display_bold(19.0).color(p.ink));
             ui.add_space(10.0);
-            crate::commands::menu_bar(self, ui);
+            if !self.has_native_menu() {
+                crate::commands::menu_bar(self, ui);
+            }
             ui.add_space(10.0);
             // Segmented module switcher.
             egui::Frame::new()
@@ -778,6 +812,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.now = ctx.input(|i| i.time);
         self.poll_jobs(&ctx);
+        self.native_menu_frame(&ctx);
         self.global_shortcuts(&ctx);
         self.handle_dropped_files(&ctx);
 

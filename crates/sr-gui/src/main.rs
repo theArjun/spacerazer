@@ -9,6 +9,8 @@
 
 mod app;
 mod commands;
+#[cfg(any(target_os = "macos", windows))]
+mod native_menu;
 mod sunburst;
 mod theme;
 mod util;
