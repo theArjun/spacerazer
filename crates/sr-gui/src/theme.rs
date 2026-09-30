@@ -19,6 +19,8 @@ const BODY_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/AtkinsonHyperlegibl
 const MONO: &[u8] = include_bytes!("../assets/fonts/AtkinsonHyperlegibleMono-400.ttf");
 const DISPLAY: &[u8] = include_bytes!("../assets/fonts/BricolageGrotesque-600.ttf");
 const DISPLAY_BOLD: &[u8] = include_bytes!("../assets/fonts/BricolageGrotesque-700.ttf");
+/// Subset of Noto Sans Symbols 2 with the keyboard modifier glyphs (⌘⌥⇧⌫).
+const KEY_SYMBOLS: &[u8] = include_bytes!("../assets/fonts/NotoSansSymbols2-keys.ttf");
 
 pub const SEMIBOLD: &str = "body-semibold";
 pub const DISPLAY_FAMILY: &str = "display";
@@ -130,6 +132,7 @@ fn fonts() -> FontDefinitions {
         ("atkinson-mono", MONO),
         ("bricolage", DISPLAY),
         ("bricolage-bold", DISPLAY_BOLD),
+        ("key-symbols", KEY_SYMBOLS),
     ] {
         f.font_data
             .insert(name.into(), Arc::new(FontData::from_static(bytes)));
@@ -141,6 +144,7 @@ fn fonts() -> FontDefinitions {
         .cloned()
         .unwrap_or_default();
     // Hack (egui's monospace) covers arrows and box-drawing glyphs.
+    fallback.push("key-symbols".into());
     fallback.push("Hack".into());
     let with = |first: &str| -> Vec<String> {
         std::iter::once(first.to_string())

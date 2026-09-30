@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "See what fills your disk and reclaim space safely"
+homepage = "https://github.com/theArjun/spacerazer"
+repository = "https://github.com/theArjun/spacerazer"
 
 [[bin]]
 name = "spacerazer"
@@ -28,3 +31,18 @@ serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 image.workspace = true
+
+[package.metadata.deb]
+name = "spacerazer"
+maintainer = "Arjun Adhikari <33110520+theArjun@users.noreply.github.com>"
+section = "utils"
+priority = "optional"
+depends = "$auto"
+extended-description = "Interactive sunburst disk map, developer build-artifact cleaner and duplicate finder, with a reviewable Trash Drawer for safe deletion."
+assets = [
+    ["target/release/spacerazer", "usr/bin/", "755"],
+    ["target/release/spacerazer-cli", "usr/bin/", "755"],
+    ["../../packaging/linux/spacerazer.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/1024x1024/apps/spacerazer.png", "644"],
+    ["assets/icon-256.png", "usr/share/icons/hicolor/256x256/apps/spacerazer.png", "644"],
+]

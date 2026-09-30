@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=SpaceRazer
+GenericName=Disk Usage Analyzer
+Comment=See what fills your disk and reclaim space safely
+Exec=spacerazer %F
+Icon=spacerazer
+Terminal=false
+Categories=Utility;System;Filesystem;
+Keywords=disk;space;usage;duplicates;cleanup;
+MimeType=inode/directory;

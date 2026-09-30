@@ -1,9 +1,14 @@
+// Release builds on Windows are GUI apps with no console window. The CLI
+// ships separately as `spacerazer-cli.exe`.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 //! SpaceRazer desktop application.
 //!
 //! `spacerazer` with no arguments (or with folder paths) opens the GUI;
 //! `spacerazer <subcommand>` runs the headless CLI.
 
 mod app;
+mod commands;
 mod sunburst;
 mod theme;
 mod util;
@@ -36,6 +41,7 @@ fn main() {
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([900.0, 600.0])
             .with_drag_and_drop(true)
+            .with_icon(app_icon())
             // Dev screenshots need the window visible to be painted.
             .with_window_level(if std::env::var_os("SPACERAZER_SCREENSHOT").is_some() {
                 egui::WindowLevel::AlwaysOnTop
@@ -51,5 +57,16 @@ fn main() {
     ) {
         eprintln!("error: {e}");
         std::process::exit(1);
+    }
+}
+
+fn app_icon() -> egui::IconData {
+    let img = image::load_from_memory(include_bytes!("../assets/icon-256.png"))
+        .expect("bundled icon is a valid PNG")
+        .to_rgba8();
+    egui::IconData {
+        width: img.width(),
+        height: img.height(),
+        rgba: img.into_raw(),
     }
 }

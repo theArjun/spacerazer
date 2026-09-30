@@ -3,13 +3,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use egui::{Key, KeyboardShortcut, Modifiers, RichText};
+use egui::{Key, RichText};
 use sr_cli::settings::{Settings, Theme};
 use sr_core::{Module, NodeFlags, NodeId, Tree, format_size};
 use sr_ops::{Drawer, ExecEvent, Journal, Method, Report, StagedItem};
 use sr_platform::{ProtectedPaths, VolumeInfo};
 use sr_scan::ScanHandle;
 
+use crate::commands::Cmd;
 use crate::theme::{self, Typo};
 use crate::util::{Job, Level, Log};
 use crate::views;
@@ -40,6 +41,8 @@ pub enum Action {
     ExcludeFromScan(PathBuf),
     ShowInDevSweep(PathBuf),
     ShowInMap(PathBuf),
+    /// A menu command raised from inside a view; run after the frame.
+    Command(Cmd),
 }
 
 pub struct ScanState {
@@ -402,6 +405,7 @@ impl App {
         for a in actions {
             match a {
                 Action::StartScan(roots) => self.start_scan(roots),
+                Action::Command(c) => crate::commands::run(self, ctx, c),
                 Action::Rescan => {
                     if let Some(s) = &self.scan {
                         let roots = s.handle.options.roots.clone();
@@ -470,6 +474,9 @@ impl App {
                     }
                 }
             }
+        }
+        if !self.actions.is_empty() {
+            ctx.request_repaint();
         }
         if self.settings_dirty {
             self.settings_dirty = false;
@@ -582,36 +589,15 @@ impl App {
     // ------------------------------------------------------------ shortcuts
 
     fn global_shortcuts(&mut self, ctx: &egui::Context) {
-        let cmd = Modifiers::COMMAND;
-        let (m1, m2, m3, find, rescan, help, esc) = ctx.input_mut(|i| {
+        crate::commands::handle_hotkeys(self, ctx);
+        let (help, esc) = ctx.input(|i| {
             (
-                i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::Num1)),
-                i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::Num2)),
-                i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::Num3)),
-                i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::F)),
-                i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::R)),
                 i.events
                     .iter()
                     .any(|e| matches!(e, egui::Event::Text(t) if t == "?")),
                 i.key_pressed(Key::Escape),
             )
         });
-        if m1 {
-            self.tab = Tab::SpaceMap;
-        }
-        if m2 {
-            self.tab = Tab::DevSweep;
-        }
-        if m3 {
-            self.tab = Tab::DuplicateLens;
-        }
-        if find {
-            self.tab = Tab::SpaceMap;
-            self.map.focus_search = true;
-        }
-        if rescan {
-            self.actions.push(Action::Rescan);
-        }
         if help && !ctx.egui_wants_keyboard_input() {
             self.dialogs.help = !self.dialogs.help;
         }
@@ -625,9 +611,11 @@ impl App {
                 || d.journal
                 || d.issues
                 || d.log
+                || d.quarantine
                 || d.report.is_some()
                 || d.largest.is_some()
             {
+                d.quarantine = false;
                 d.help = false;
                 d.settings = false;
                 d.journal = false;
@@ -653,7 +641,9 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_space(6.0);
             ui.label(RichText::new("SpaceRazer").display_bold(19.0).color(p.ink));
-            ui.add_space(18.0);
+            ui.add_space(10.0);
+            crate::commands::menu_bar(self, ui);
+            ui.add_space(10.0);
             // Segmented module switcher.
             egui::Frame::new()
                 .fill(p.mist)
@@ -661,13 +651,14 @@ impl App {
                 .inner_margin(egui::Margin::same(3))
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    for (tab, label, key) in [
-                        (Tab::SpaceMap, "Space Map", "1"),
-                        (Tab::DevSweep, "DevSweep", "2"),
-                        (Tab::DuplicateLens, "DuplicateLens", "3"),
+                    for (tab, cmd) in [
+                        (Tab::SpaceMap, Cmd::SpaceMap),
+                        (Tab::DevSweep, Cmd::DevSweep),
+                        (Tab::DuplicateLens, Cmd::DuplicateLens),
                     ] {
-                        let r = theme::tab(ui, self.tab == tab, label);
-                        if r.on_hover_text(format!("Ctrl/Cmd+{key}")).clicked() {
+                        let r = theme::tab(ui, self.tab == tab, cmd.label());
+                        let hint = cmd.shortcut_text(ui.ctx()).unwrap_or_default();
+                        if r.on_hover_text(hint).clicked() {
                             self.tab = tab;
                         }
                     }
@@ -687,31 +678,6 @@ impl App {
                 {
                     self.dialogs.help = !self.dialogs.help;
                 }
-                ui.menu_button("☰", |ui| {
-                    ui.set_min_width(180.0);
-                    if ui.button("Operation journal").clicked() {
-                        self.dialogs.journal = true;
-                        ui.close();
-                    }
-                    if ui.button("Quarantine").clicked() {
-                        self.dialogs.quarantine = true;
-                        ui.close();
-                    }
-                    if ui.button("Scan issues").clicked() {
-                        self.dialogs.issues = true;
-                        ui.close();
-                    }
-                    if ui.button("Log").clicked() {
-                        self.dialogs.log = true;
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Copy diagnostics").clicked() {
-                        ui.ctx().copy_text(views::dialogs::diagnostics(self));
-                        self.log.info("Diagnostics copied to clipboard", self.now);
-                        ui.close();
-                    }
-                });
                 if self.tab == Tab::SpaceMap && self.scan.is_some() {
                     ui.add_space(6.0);
                     views::map::search_box(self, ui);

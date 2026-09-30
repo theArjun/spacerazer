@@ -6,6 +6,7 @@ use sr_core::Module;
 use sr_ops::Method;
 
 use crate::app::{Action, App, is_cow_fs};
+use crate::commands::Cmd;
 use crate::theme::{self, Typo};
 use crate::views::map::DragPath;
 
@@ -92,7 +93,10 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
             let enabled = count > 0 && app.staging.is_empty();
             if ui
                 .add_enabled(enabled, theme::danger(ui, "Delete permanently…"))
-                .on_hover_text("Irreversible. Requires confirmation.")
+                .on_hover_text(format!(
+                    "Cannot be undone. Asks for confirmation. ({})",
+                    Cmd::DeletePermanently.shortcut_text(ui.ctx()).unwrap_or_default()
+                ))
                 .clicked()
             {
                 app.dialogs.confirm = Some(Method::Permanent);
@@ -100,14 +104,20 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
             }
             if ui
                 .add_enabled(enabled, theme::primary(ui, "Move to Trash"))
-                .on_hover_text("Recoverable: items go to the OS trash (or a quarantine folder where no trash exists).")
+                .on_hover_text(format!(
+                    "Recoverable: items go to the system trash, or to quarantine where there is none. ({})",
+                    Cmd::MoveToTrash.shortcut_text(ui.ctx()).unwrap_or_default()
+                ))
                 .clicked()
             {
                 app.dialogs.confirm = Some(Method::Trash);
             }
             if ui
                 .add_enabled(enabled, egui::Button::new("Dry run"))
-                .on_hover_text("Report exactly what would happen, without changing anything.")
+                .on_hover_text(format!(
+                    "See exactly what would happen, without changing anything. ({})",
+                    Cmd::DryRun.shortcut_text(ui.ctx()).unwrap_or_default()
+                ))
                 .clicked()
             {
                 app.actions.push(Action::Execute(Method::DryRun));

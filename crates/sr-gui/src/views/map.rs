@@ -11,6 +11,7 @@ use sr_cli::settings::ColorMode;
 use sr_core::{Module, NodeFlags, NodeId, NodeKind, SizeMode, Tree, now_secs};
 
 use crate::app::{Action, App, ScanState};
+use crate::commands::Cmd;
 use crate::sunburst::{
     ArcSeg, Colorizer, Geometry, Layout, LayoutParams, Palette, Transform, ease_in_out, tessellate,
 };
@@ -342,25 +343,30 @@ fn status_bar(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
         {
             app.dialogs.issues = true;
         }
-        if ui.button("Top 100 files").clicked() {
-            app.dialogs.largest = Some(tree.largest_files(100, app.settings.size_mode));
+        let ctx = ui.ctx().clone();
+        let hint = |c: Cmd| c.shortcut_text(&ctx).unwrap_or_default();
+        if ui
+            .button("Largest files")
+            .on_hover_text(hint(Cmd::LargestFiles))
+            .clicked()
+        {
+            app.actions.push(Action::Command(Cmd::LargestFiles));
         }
         ui.menu_button("Export", |ui| {
-            if ui.button("Tree summary as JSON…").clicked() {
-                export(app, tree, "json");
-                ui.close();
-            }
-            if ui.button("Tree summary as CSV…").clicked() {
-                export(app, tree, "csv");
-                ui.close();
-            }
-            if ui.button("Chart as SVG…").clicked() {
-                export(app, tree, "svg");
-                ui.close();
+            for c in [Cmd::ExportJson, Cmd::ExportCsv, Cmd::ExportSvg] {
+                let b = egui::Button::new(c.label()).shortcut_text(hint(c));
+                if ui.add(b).clicked() {
+                    app.actions.push(Action::Command(c));
+                    ui.close();
+                }
             }
         });
-        if ui.button("New scan").clicked() {
-            app.scan = None;
+        if ui
+            .button("New scan")
+            .on_hover_text(hint(Cmd::NewScan))
+            .clicked()
+        {
+            app.actions.push(Action::Command(Cmd::NewScan));
         }
         ui.separator();
         let mut mode = app.settings.size_mode;
@@ -943,15 +949,34 @@ fn keyboard(app: &mut App, ctx: &egui::Context, tree: &Tree) {
             app.map.selected = Some(old);
         }
     }
-    if del {
-        if let Some(s) = app.map.selected {
-            app.actions.push(Action::Stage {
-                paths: vec![tree.path(s)],
-                source: Module::SpaceMap,
-                reason: "Selected in Space Map".into(),
-            });
-        }
+    if del && app.map.selected.is_some() {
+        app.actions.push(Action::Command(Cmd::StageSelection));
     }
+}
+
+/// Stage the chart's selected item in the Trash Drawer.
+pub fn stage_selection(app: &mut App) {
+    let Some(sel) = app.map.selected else { return };
+    let path = app
+        .scan
+        .as_ref()
+        .and_then(|s| s.tree().read().ok().map(|t| t.path(sel)));
+    if let Some(path) = path {
+        app.actions.push(Action::Stage {
+            paths: vec![path],
+            source: Module::SpaceMap,
+            reason: "Selected in Space Map".into(),
+        });
+    }
+}
+
+/// Export the current scan (FR-MAP-16).
+pub fn export_current(app: &mut App, kind: &str) {
+    let Some(tree) = app.scan.as_ref().map(|s| s.tree().clone()) else {
+        return;
+    };
+    let t = tree.read().unwrap_or_else(|e| e.into_inner());
+    export(app, &t, kind);
 }
 
 fn list_panel(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {

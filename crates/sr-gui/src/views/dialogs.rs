@@ -753,74 +753,68 @@ fn log(app: &mut App, ctx: &egui::Context) {
 
 // ---------------------------------------------------------------- help
 
-/// Key combination and what it does.
-type Shortcut<'a> = (Vec<&'a str>, &'a str);
-
 fn help(app: &mut App, ctx: &egui::Context) {
     if !app.dialogs.help {
         return;
     }
-    let cmd = if cfg!(target_os = "macos") {
-        "⌘"
-    } else {
-        "Ctrl"
-    };
-    let groups: [(&str, Vec<Shortcut>); 2] = [
-        (
-            "Anywhere",
-            vec![
-                (vec![cmd, "1"], "Space Map"),
-                (vec![cmd, "2"], "DevSweep"),
-                (vec![cmd, "3"], "DuplicateLens"),
-                (vec![cmd, "F"], "Search the scan"),
-                (vec![cmd, "R"], "Rescan"),
-                (vec!["Esc"], "Close dialog, or cancel the running job"),
-                (vec!["?"], "Show these shortcuts"),
-            ],
-        ),
-        (
-            "Space Map",
-            vec![
-                (vec!["←", "→"], "Previous or next item in the ring"),
-                (vec!["↑"], "Move outward, into the selected folder's ring"),
-                (vec!["↓"], "Move inward, to the parent"),
-                (vec!["Enter"], "Open the selected folder"),
-                (vec!["Backspace"], "Go up one level"),
-                (vec!["Delete"], "Send the selection to the Trash Drawer"),
-            ],
-        ),
-    ];
+    // Menu hotkeys come straight from the command table.
+    let mut groups: Vec<(&str, Vec<(String, &str)>)> = crate::commands::MENUS
+        .iter()
+        .map(|(title, items)| {
+            let rows = items
+                .iter()
+                .flatten()
+                .filter_map(|c| c.shortcut_text(ctx).map(|k| (k, c.label())))
+                .collect::<Vec<_>>();
+            (*title, rows)
+        })
+        .filter(|(_, rows)| !rows.is_empty())
+        .collect();
+    groups.push((
+        "In the chart",
+        vec![
+            ("← →".into(), "Previous or next item in the ring"),
+            ("↑".into(), "Move outward into the selected folder"),
+            ("↓".into(), "Move inward to the parent"),
+            ("Enter".into(), "Open the selected folder"),
+            ("Backspace".into(), "Go up one level"),
+            ("Esc".into(), "Close a dialog, or cancel the running job"),
+        ],
+    ));
     let mut open = true;
     theme::window(
         ctx,
         "help",
         "Keyboard shortcuts",
-        None,
-        520.0,
+        Some("Every menu command, with its key."),
+        620.0,
         &mut open,
         |ui| {
             let p = theme::of(ui);
-            for (title, rows) in &groups {
-                ui.label(RichText::new(*title).semibold().color(p.slate));
-                ui.add_space(4.0);
-                egui::Grid::new(("keys", *title))
-                    .num_columns(2)
-                    .spacing([18.0, 8.0])
-                    .min_col_width(130.0)
-                    .show(ui, |ui| {
-                        for (keys, what) in rows {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                for k in keys {
-                                    theme::keycap(ui, k);
-                                }
-                            });
-                            ui.label(RichText::new(*what).color(p.ink));
-                            ui.end_row();
+            egui::ScrollArea::vertical()
+                .max_height(520.0)
+                .show(ui, |ui| {
+                    // Two columns of groups.
+                    ui.columns(2, |cols| {
+                        for (i, (title, rows)) in groups.iter().enumerate() {
+                            let ui = &mut cols[i % 2];
+                            ui.label(RichText::new(*title).semibold().color(p.slate));
+                            ui.add_space(4.0);
+                            for (keys, what) in rows {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(*what).color(p.ink));
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            theme::keycap(ui, keys);
+                                        },
+                                    );
+                                });
+                            }
+                            ui.add_space(14.0);
                         }
                     });
-                ui.add_space(14.0);
-            }
+                });
         },
     );
     if !open {
