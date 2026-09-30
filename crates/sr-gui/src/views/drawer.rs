@@ -162,7 +162,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                 let it = &items[row.index()];
                 row.col(|ui| {
                     let icon = match it.kind {
-                        sr_core::NodeKind::Dir => "📁 ",
+                        sr_core::NodeKind::Dir => "",
                         sr_core::NodeKind::Symlink => "↪ ",
                         _ => "",
                     };

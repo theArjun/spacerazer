@@ -7,6 +7,10 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.85"
+authors = ["Arjun Adhikari <33110520+theArjun@users.noreply.github.com>"]
+repository = "https://github.com/theArjun/spacerazer"
+homepage = "https://github.com/theArjun/spacerazer"
+publish = false
 
 [workspace.dependencies]
 sr-core = { path = "crates/sr-core" }

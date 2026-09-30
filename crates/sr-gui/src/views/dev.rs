@@ -235,7 +235,8 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
         ui.label("Roots:");
         let mut remove = None;
         for (i, r) in app.dev.roots.iter().enumerate() {
-            ui.label(RichText::new(r.display().to_string()).monospace());
+            ui.label(RichText::new(crate::util::display_path(r)).semibold())
+                .on_hover_text(r.display().to_string());
             if ui.small_button("×").clicked() {
                 remove = Some(i);
             }

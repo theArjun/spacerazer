@@ -186,18 +186,32 @@ pub fn global_cache_locations() -> Vec<(String, PathBuf, Risk, String)> {
 }
 
 /// Existing global caches with their allocated sizes.
+///
+/// Sizing large caches can take a long time, so it runs on its own small
+/// thread pool: sharing rayon's global pool would starve project analysis
+/// running at the same time.
 pub fn scan_global_caches(cancel: &CancellationToken) -> Vec<GlobalCache> {
-    global_cache_locations()
-        .into_par_iter()
-        .filter(|(_, p, _, _)| !cancel.is_cancelled() && p.is_dir())
-        .map(|(name, path, risk, hint)| GlobalCache {
-            allocated: size_dir(&path, cancel).allocated,
-            name,
-            path,
-            risk,
-            hint,
-        })
-        .collect()
+    let run = || {
+        global_cache_locations()
+            .into_par_iter()
+            .filter(|(_, p, _, _)| !cancel.is_cancelled() && p.is_dir())
+            .map(|(name, path, risk, hint)| GlobalCache {
+                allocated: size_dir(&path, cancel).allocated,
+                name,
+                path,
+                risk,
+                hint,
+            })
+            .collect()
+    };
+    match rayon::ThreadPoolBuilder::new()
+        .num_threads(3)
+        .thread_name(|i| format!("sr-caches-{i}"))
+        .build()
+    {
+        Ok(pool) => pool.install(run),
+        Err(_) => run(),
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -424,7 +424,7 @@ fn breadcrumbs(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
                 if p.as_os_str().is_empty() {
                     "All roots".to_string()
                 } else {
-                    p.display().to_string()
+                    crate::util::display_path(p)
                 }
             } else {
                 tree.name_lossy(id)
@@ -1078,7 +1078,7 @@ fn list_panel(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
                     let (r, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
                     ui.painter().rect_filled(r, 2.0, swatch);
                     let icon = match n.kind {
-                        NodeKind::Dir => "📁 ",
+                        NodeKind::Dir => "",
                         NodeKind::Symlink => "↪ ",
                         _ => "",
                     };

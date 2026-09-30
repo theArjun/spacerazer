@@ -151,6 +151,14 @@ pub fn poll(app: &mut App) {
                         sr_core::format_size(r.total_wasted(), app.settings.size_units)
                     );
                     app.log.info(msg, ctx_now);
+                    // Open the biggest group so the comparison is visible at once.
+                    d.selected = if !r.groups.is_empty() {
+                        Some((false, 0))
+                    } else if !r.similar.is_empty() {
+                        Some((true, 0))
+                    } else {
+                        None
+                    };
                     d.result = Some(r);
                     done = true;
                 }
@@ -309,7 +317,8 @@ fn options_bar(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
             ui.label("Roots:");
             let mut remove = None;
             for (i, r) in d.roots.iter().enumerate() {
-                ui.label(RichText::new(r.display().to_string()).monospace());
+                ui.label(RichText::new(crate::util::display_path(r)).semibold())
+                    .on_hover_text(r.display().to_string());
                 if ui.small_button("×").clicked() {
                     remove = Some(i);
                 }
@@ -474,8 +483,8 @@ fn groups_list_inner(app: &mut App, ui: &mut egui::Ui, r: &DupResult) {
     });
     ui.separator();
     let sections = [
-        (false, "Identical", &r.groups),
-        (true, "Similar (review only)", &r.similar),
+        (false, "identical", &r.groups),
+        (true, "similar, review only", &r.similar),
     ];
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -484,7 +493,8 @@ fn groups_list_inner(app: &mut App, ui: &mut egui::Ui, r: &DupResult) {
                 if groups.is_empty() {
                     continue;
                 }
-                ui.label(RichText::new(format!("{title} — {} groups", groups.len())).semibold());
+                let noun = if groups.len() == 1 { "group" } else { "groups" };
+                ui.label(RichText::new(format!("{} {noun}, {title}", groups.len())).semibold());
                 for (i, g) in groups.iter().enumerate().take(5000) {
                     let sel = app.dup.selected == Some((similar, i));
                     let name = g
@@ -636,7 +646,13 @@ fn group_detail(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
                             }
                             preview(app, ui, &f.path);
                             ui.label(RichText::new(crate::app::path_name(&f.path)).semibold());
-                            ui.label(RichText::new(f.path.display().to_string()).small().weak())
+                            let folder = f
+                                .path
+                                .parent()
+                                .map(crate::util::display_path)
+                                .unwrap_or_default();
+                            ui.label(RichText::new(folder).small().weak())
+                                .on_hover_text(f.path.display().to_string())
                                 .context_menu(|ui| {
                                     if ui.button("Reveal in file manager").clicked() {
                                         app.actions.push(Action::Reveal(f.path.clone()));
@@ -742,7 +758,7 @@ fn load_preview(p: &Path) -> PreviewData {
                 Err(e) if e.valid_up_to() > n.saturating_sub(4) && n > 0 => {
                     PreviewData::Text(String::from_utf8_lossy(&buf[..e.valid_up_to()]).into_owned())
                 }
-                _ => PreviewData::Unavailable("Binary file — no preview".into()),
+                _ => PreviewData::Unavailable("No preview for this file type".into()),
             }
         }
         Err(e) => PreviewData::Unavailable(e.to_string()),

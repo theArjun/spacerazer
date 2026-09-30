@@ -123,6 +123,37 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Short form of a path for display: the home folder becomes `~`, and long
+/// paths keep their start and last two components around an ellipsis.
+pub fn display_path(p: &std::path::Path) -> String {
+    let mut s = p.display().to_string();
+    if let Some(home) = sr_platform::home_dir() {
+        if let Ok(rest) = p.strip_prefix(&home) {
+            s = if rest.as_os_str().is_empty() {
+                "~".into()
+            } else {
+                format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display())
+            };
+        }
+    }
+    const MAX: usize = 48;
+    if s.chars().count() <= MAX {
+        return s;
+    }
+    let sep = std::path::MAIN_SEPARATOR;
+    let parts: Vec<&str> = s.split(sep).collect();
+    if parts.len() <= 4 {
+        return s;
+    }
+    let head = if parts[0].is_empty() {
+        format!("{sep}{}", parts[1])
+    } else {
+        parts[0].to_string()
+    };
+    let tail = parts[parts.len() - 2..].join(&sep.to_string());
+    format!("{head}{sep}…{sep}{tail}")
+}
+
 /// `1234567` → `1,234,567`.
 pub fn group_digits(n: u64) -> String {
     let s = n.to_string();
@@ -216,5 +247,19 @@ mod tests {
         assert_eq!(group_digits(0), "0");
         assert_eq!(group_digits(1_234_567), "1,234,567");
         assert_eq!(group_digits(999), "999");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn short_paths() {
+        use std::path::Path;
+        assert_eq!(display_path(Path::new("/usr/local")), "/usr/local");
+        let long =
+            Path::new("/private/tmp/some-very-long-generated-folder-name/abc/scratchpad/demo");
+        assert_eq!(display_path(long), "/private/…/scratchpad/demo");
+        if let Some(h) = sr_platform::home_dir() {
+            assert_eq!(display_path(&h), "~");
+            assert_eq!(display_path(&h.join("code")), "~/code");
+        }
     }
 }

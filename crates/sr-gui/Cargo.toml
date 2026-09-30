@@ -4,9 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
 description = "See what fills your disk and reclaim space safely"
-homepage = "https://github.com/theArjun/spacerazer"
-repository = "https://github.com/theArjun/spacerazer"
+homepage.workspace = true
 
 [[bin]]
 name = "spacerazer"
