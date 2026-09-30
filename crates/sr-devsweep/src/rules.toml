@@ -1,0 +1,188 @@
+# DevSweep built-in detection rules (Appendix A, NFR-MAIN-03).
+#
+# Fields:
+#   ecosystem        display name / project type
+#   markers          globs matched against entry names directly in the project
+#                    dir; entries containing '/' are literal relative paths
+#   artifacts        globs matched against names of direct subdirectories
+#   risk             Safe | Caution | Review
+#   regenerate       "regenerate with" hint
+#   caution_without  if none of these globs is present, Safe is raised to Caution
+#   kind             "marker" (default) or "dir-contains": the artifact is any
+#                    subdirectory (matching `artifacts`) that itself contains a
+#                    `markers` file
+#   defines_project  (default true) false = the rule only flags artifacts; they
+#                    belong to the nearest enclosing project
+#   clean            official clean command (argv, run with cwd = project dir;
+#                    "{dir}" is replaced by the project path)
+#   note             risk explanation shown instead of the generic one
+
+[[rule]]
+ecosystem = "Rust"
+markers = ["Cargo.toml"]
+artifacts = ["target"]
+risk = "Safe"
+regenerate = "cargo build"
+clean = ["cargo", "clean", "--manifest-path", "{dir}/Cargo.toml"]
+
+[[rule]]
+ecosystem = "Node.js"
+markers = ["package.json"]
+artifacts = ["node_modules"]
+risk = "Safe"
+regenerate = "npm ci / pnpm i / yarn"
+caution_without = ["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock"]
+
+[[rule]]
+ecosystem = "Next.js"
+markers = ["next.config.*"]
+artifacts = [".next"]
+risk = "Safe"
+regenerate = "next build"
+
+[[rule]]
+ecosystem = "Nuxt"
+markers = ["nuxt.config.*"]
+artifacts = [".nuxt", ".output"]
+risk = "Safe"
+regenerate = "nuxt build"
+
+[[rule]]
+ecosystem = "Vite"
+markers = ["vite.config.*"]
+artifacts = ["dist"]
+risk = "Caution"
+regenerate = "vite build"
+note = "Build output; may be a deliverable that is published from this directory."
+
+[[rule]]
+ecosystem = "Turborepo"
+markers = ["turbo.json"]
+artifacts = [".turbo"]
+risk = "Safe"
+regenerate = "automatic"
+
+[[rule]]
+ecosystem = "Python"
+markers = ["pyproject.toml", "setup.py", "setup.cfg", "requirements*.txt", "Pipfile", "tox.ini"]
+artifacts = []
+risk = "Safe"
+regenerate = ""
+
+[[rule]]
+ecosystem = "Python"
+kind = "dir-contains"
+markers = ["pyvenv.cfg"]
+artifacts = ["*"]
+risk = "Review"
+regenerate = "python -m venv + install"
+defines_project = false
+note = "Virtual environment; may contain manually installed packages."
+
+[[rule]]
+ecosystem = "Python"
+markers = ["*.py", "pyproject.toml", "setup.py", "setup.cfg", "tox.ini"]
+artifacts = ["__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox"]
+risk = "Safe"
+regenerate = "automatic"
+defines_project = false
+
+[[rule]]
+ecosystem = "Maven"
+markers = ["pom.xml"]
+artifacts = ["target"]
+risk = "Safe"
+regenerate = "mvn package"
+clean = ["mvn", "-q", "-f", "{dir}/pom.xml", "clean"]
+
+[[rule]]
+ecosystem = "Gradle"
+markers = ["build.gradle*", "settings.gradle*"]
+artifacts = ["build", ".gradle"]
+risk = "Safe"
+regenerate = "gradle build"
+clean = ["gradle", "-p", "{dir}", "clean"]
+
+[[rule]]
+ecosystem = "Xcode"
+markers = ["*.xcodeproj", "*.xcworkspace"]
+artifacts = []
+risk = "Safe"
+regenerate = "Xcode build"
+
+[[rule]]
+ecosystem = "CocoaPods"
+markers = ["Podfile"]
+artifacts = ["Pods"]
+risk = "Caution"
+regenerate = "pod install"
+
+[[rule]]
+ecosystem = "Flutter/Dart"
+markers = ["pubspec.yaml"]
+artifacts = ["build", ".dart_tool"]
+risk = "Safe"
+regenerate = "flutter pub get"
+clean = ["flutter", "clean"]
+
+[[rule]]
+ecosystem = "Go"
+markers = ["go.mod"]
+artifacts = []
+risk = "Safe"
+regenerate = ""
+
+[[rule]]
+ecosystem = ".NET"
+markers = ["*.csproj", "*.fsproj", "*.vbproj", "*.sln"]
+artifacts = ["bin", "obj"]
+risk = "Safe"
+regenerate = "dotnet build"
+clean = ["dotnet", "clean"]
+
+[[rule]]
+ecosystem = "CMake"
+markers = ["CMakeLists.txt"]
+artifacts = ["build", "cmake-build-*"]
+risk = "Caution"
+regenerate = "cmake --build"
+note = "Regenerable, but a full C/C++ rebuild can be slow."
+
+[[rule]]
+ecosystem = "Zig"
+markers = ["build.zig"]
+artifacts = ["zig-cache", ".zig-cache", "zig-out"]
+risk = "Safe"
+regenerate = "zig build"
+
+[[rule]]
+ecosystem = "Haskell"
+markers = ["stack.yaml"]
+artifacts = [".stack-work"]
+risk = "Safe"
+regenerate = "stack build"
+clean = ["stack", "clean"]
+
+[[rule]]
+ecosystem = "Elixir"
+markers = ["mix.exs"]
+artifacts = ["_build", "deps"]
+risk = "Safe"
+regenerate = "mix deps.get && mix compile"
+clean = ["mix", "clean"]
+
+[[rule]]
+ecosystem = "Terraform"
+markers = ["*.tf"]
+artifacts = [".terraform"]
+risk = "Caution"
+regenerate = "terraform init"
+note = "Providers and modules are re-downloaded by terraform init."
+
+[[rule]]
+ecosystem = "Unity"
+markers = ["ProjectSettings/ProjectVersion.txt"]
+artifacts = ["Library", "Temp", "obj"]
+risk = "Caution"
+regenerate = "Open in Unity"
+note = "Regenerable, but Unity re-imports all assets (slow)."

@@ -1,0 +1,24 @@
+[package]
+name = "sr-dedup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sr-core.workspace = true
+sr-platform.workspace = true
+blake3.workspace = true
+crossbeam-channel.workspace = true
+globset.workspace = true
+image.workspace = true
+image_hasher.workspace = true
+memmap2.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+xxhash-rust.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+sr-core = { path = "crates/sr-core" }
+sr-platform = { path = "crates/sr-platform" }
+sr-scan = { path = "crates/sr-scan" }
+sr-ops = { path = "crates/sr-ops" }
+sr-devsweep = { path = "crates/sr-devsweep" }
+sr-dedup = { path = "crates/sr-dedup" }
+sr-cli = { path = "crates/sr-cli" }
+
+anyhow = "1"
+bitflags = { version = "2", features = ["serde"] }
+blake3 = { version = "1.8", features = ["rayon", "mmap"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4.6", features = ["derive"] }
+crossbeam-channel = "0.5"
+directories = "6"
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence"] }
+egui = "0.36"
+egui_extras = "0.36"
+globset = "0.4"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
+image_hasher = "3.1"
+libc = "0.2"
+memmap2 = "0.9"
+opener = { version = "0.9", features = ["reveal"] }
+proptest = "1.11"
+rayon = "1.12"
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.39"
+tempfile = "3"
+thiserror = "2"
+toml = "1"
+trash = "5.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_Security"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.dev.package."*"]
+opt-level = 2

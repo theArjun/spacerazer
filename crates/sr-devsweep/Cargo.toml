@@ -1,0 +1,20 @@
+[package]
+name = "sr-devsweep"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sr-core.workspace = true
+sr-platform.workspace = true
+crossbeam-channel.workspace = true
+globset.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

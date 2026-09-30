@@ -1,0 +1,21 @@
+[package]
+name = "sr-ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sr-core.workspace = true
+sr-platform.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+crossbeam-channel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+trash.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
