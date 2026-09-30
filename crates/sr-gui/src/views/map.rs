@@ -755,51 +755,75 @@ fn arc_name(tree: &Tree, arc: &ArcSeg) -> String {
 }
 
 fn tooltip(app: &App, ui: &mut egui::Ui, tree: &Tree, arc: &ArcSeg) {
+    let p = theme::of(ui);
     let mode = app.settings.size_mode;
     let parent_size = tree.node(arc.parent).size(mode).max(1);
-    ui.label(RichText::new(arc_name(tree, arc)).semibold());
-    ui.label(app.fmt(arc.size));
-    ui.label(format!(
-        "{:.1}% of {}",
-        arc.size as f64 * 100.0 / parent_size as f64,
-        tree.name_lossy(arc.parent)
-    ));
+    ui.set_max_width(300.0);
+    ui.label(RichText::new(arc_name(tree, arc)).semibold().color(p.ink));
+    ui.label(
+        RichText::new(app.fmt(arc.size))
+            .display_bold(22.0)
+            .color(p.ink),
+    );
+    ui.add_space(2.0);
+    let row = |ui: &mut egui::Ui, text: String| {
+        ui.label(RichText::new(text).size(12.0).color(p.slate));
+    };
+    row(
+        ui,
+        format!(
+            "{:.1}% of {}",
+            arc.size as f64 * 100.0 / parent_size as f64,
+            tree.name_lossy(arc.parent)
+        ),
+    );
     if let Some(v) = app.scan.as_ref().and_then(|s| s.volume.as_ref()) {
         if v.total > 0 {
-            ui.label(format!(
-                "{:.2}% of volume {}",
-                arc.size as f64 * 100.0 / v.total as f64,
-                v.mount_point.display()
-            ));
+            row(
+                ui,
+                format!(
+                    "{:.2}% of the disk",
+                    arc.size as f64 * 100.0 / v.total as f64
+                ),
+            );
         }
     }
-    if let Some(n) = arc.node {
-        let node = tree.node(n);
-        if node.is_dir() {
-            ui.label(format!("{} items", node.items));
-        }
-        ui.label(format!("Modified {}", format_date(node.mtime)));
-        let f = node.flags;
-        if f.contains(NodeFlags::CLOUD) {
-            ui.label("☁ Cloud placeholder — local size only");
-        }
-        if f.contains(NodeFlags::HARDLINKED) {
-            ui.label("🔗 Hard-linked — counted once");
-        }
-        if f.contains(NodeFlags::ERROR) {
-            ui.label("⚠ Could not be fully read");
-        }
-        if f.contains(NodeFlags::EXCLUDED) {
-            ui.label("Not scanned (other filesystem or placeholder)");
-        }
-        if node.kind == NodeKind::Symlink {
-            ui.label("Symbolic link (not followed)");
-        }
-        if arc.staged {
-            ui.label(RichText::new("In Trash Drawer").italics());
-        }
-    } else {
-        ui.label(RichText::new("Items too small to draw at this zoom level").weak());
+    let Some(n) = arc.node else {
+        row(ui, "Too small to draw at this zoom level".into());
+        return;
+    };
+    let node = tree.node(n);
+    if node.is_dir() {
+        row(ui, format!("{} items", group_digits(node.items as u64)));
+    }
+    row(ui, format!("Modified {}", format_date(node.mtime)));
+    let f = node.flags;
+    let mut notes: Vec<(&str, egui::Color32)> = Vec::new();
+    if arc.staged {
+        notes.push(("In Trash Drawer", p.accent));
+    }
+    if f.contains(NodeFlags::CLOUD) {
+        notes.push(("Cloud file, local size only", p.accent));
+    }
+    if f.contains(NodeFlags::HARDLINKED) {
+        notes.push(("Hard link, counted once", p.slate));
+    }
+    if f.contains(NodeFlags::ERROR) {
+        notes.push(("Partly unreadable", p.warn));
+    }
+    if f.contains(NodeFlags::EXCLUDED) {
+        notes.push(("Not scanned: another disk", p.slate));
+    }
+    if node.kind == NodeKind::Symlink {
+        notes.push(("Symbolic link, not followed", p.slate));
+    }
+    if !notes.is_empty() {
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            for (t, c) in notes {
+                theme::tag(ui, t, c);
+            }
+        });
     }
 }
 

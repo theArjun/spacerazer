@@ -339,9 +339,9 @@ pub fn danger(ui: &egui::Ui, text: impl Into<String>) -> egui::Button<'static> {
 }
 
 /// Borderless button for secondary actions.
-pub fn ghost(ui: &egui::Ui, text: impl Into<String>) -> egui::Button<'static> {
+pub fn ghost(ui: &egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Button<'static> {
     let _ = ui;
-    egui::Button::new(RichText::new(text))
+    egui::Button::new(text)
         .fill(Color32::TRANSPARENT)
         .frame_when_inactive(false)
 }
@@ -431,6 +431,261 @@ pub fn indeterminate(
         painter.rect_filled(fill, 4.0, mix(color, p.mist, 0.4));
     }
     resp
+}
+
+// ---------------------------------------------------------------- dialogs
+
+/// A floating tool window with a custom header (title, optional subtitle,
+/// close button). Opens centred near the top of the window.
+pub fn window(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    subtitle: Option<&str>,
+    width: f32,
+    open: &mut bool,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    let screen = ctx.content_rect();
+    let mut close = false;
+    egui::Window::new(title)
+        .id(egui::Id::new(id))
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(true)
+        .default_width(width)
+        .min_width(width.min(380.0))
+        .pivot(egui::Align2::CENTER_TOP)
+        .default_pos(egui::pos2(screen.center().x, screen.top() + 72.0))
+        .frame(egui::Frame::window(&ctx.global_style()).inner_margin(Margin::same(20)))
+        .show(ctx, |ui| {
+            let p = of(ui);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(title).display_bold(20.0).color(p.ink));
+                    if let Some(sub) = subtitle {
+                        ui.label(RichText::new(sub).size(13.0).color(p.slate));
+                    }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if ui
+                        .add(ghost(ui, RichText::new("×").size(18.0).color(p.slate)))
+                        .on_hover_text("Close (Esc)")
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(14.0);
+            add(ui);
+        });
+    if close {
+        *open = false;
+    }
+}
+
+/// A blocking modal with generous padding and a fixed width.
+pub fn modal<R>(
+    ctx: &egui::Context,
+    id: &str,
+    width: f32,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let style = ctx.global_style();
+    egui::Modal::new(egui::Id::new(id))
+        .frame(
+            egui::Frame::popup(&style)
+                .inner_margin(Margin::same(24))
+                .corner_radius(12),
+        )
+        .show(ctx, |ui| {
+            ui.set_width(width);
+            add(ui)
+        })
+        .inner
+}
+
+/// Dialog title for modals.
+pub fn dialog_title(ui: &mut egui::Ui, text: &str, color: Option<Color32>) {
+    let p = of(ui);
+    ui.label(
+        RichText::new(text)
+            .display_bold(22.0)
+            .color(color.unwrap_or(p.ink)),
+    );
+    ui.add_space(4.0);
+}
+
+/// Right-aligned row of dialog buttons. Add the primary action first: the
+/// layout runs right to left.
+pub fn footer(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(20.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add);
+}
+
+/// Tinted callout box for warnings and notes.
+pub fn callout(ui: &mut egui::Ui, color: Color32, add: impl FnOnce(&mut egui::Ui)) {
+    let p = of(ui);
+    let dark = ui.visuals().dark_mode;
+    egui::Frame::new()
+        .fill(mix(color, p.surface, if dark { 0.8 } else { 0.9 }))
+        .stroke(Stroke::new(1.0, mix(color, p.surface, 0.6)))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        });
+}
+
+/// A figure with a caption beneath, for summaries.
+pub fn stat(ui: &mut egui::Ui, value: &str, caption: &str, color: Color32) {
+    let p = of(ui);
+    ui.vertical(|ui| {
+        ui.label(RichText::new(value).display_bold(24.0).color(color));
+        ui.label(RichText::new(caption).size(12.0).color(p.slate));
+    });
+}
+
+/// A keyboard key drawn as a keycap.
+pub fn keycap(ui: &mut egui::Ui, key: &str) {
+    let p = of(ui);
+    egui::Frame::new()
+        .fill(p.surface)
+        .stroke(Stroke::new(1.0, p.line))
+        .corner_radius(5)
+        .inner_margin(Margin::symmetric(7, 2))
+        .show(ui, |ui| {
+            ui.label(RichText::new(key).semibold().size(12.0).color(p.ink));
+        });
+}
+
+/// A labelled settings row: name and help on the left, control on the
+/// right, with a hairline beneath.
+pub fn setting_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    help: &str,
+    control: impl FnOnce(&mut egui::Ui),
+) {
+    let p = of(ui);
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width((ui.available_width() - 200.0).max(220.0));
+            ui.label(RichText::new(label).semibold().color(p.ink));
+            if !help.is_empty() {
+                ui.label(RichText::new(help).size(12.0).color(p.slate));
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control);
+    });
+    ui.add_space(8.0);
+    let r = ui.available_rect_before_wrap();
+    ui.painter()
+        .hline(r.x_range(), r.top(), Stroke::new(1.0, p.line));
+}
+
+/// On/off switch.
+pub fn toggle(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
+    let p = of(ui);
+    let size = Vec2::new(34.0, 20.0);
+    let (rect, mut resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, "")
+    });
+    let t = ui.ctx().animate_bool_responsive(resp.id, *on);
+    let track = mix(mix(p.line, p.slate, 0.2), p.accent, t);
+    ui.painter().rect_filled(rect, 10.0, track);
+    let x = egui::lerp(rect.left() + 10.0..=rect.right() - 10.0, t);
+    ui.painter()
+        .circle_filled(egui::pos2(x, rect.center().y), 7.5, p.surface);
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(2.0),
+            12.0,
+            Stroke::new(1.5, p.accent),
+            egui::StrokeKind::Outside,
+        );
+    }
+    resp
+}
+
+/// Segmented choice between a few values.
+pub fn segmented<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    options: &[(T, &str)],
+) -> bool {
+    let p = of(ui);
+    let mut changed = false;
+    egui::Frame::new()
+        .fill(p.mist)
+        .corner_radius(7)
+        .inner_margin(Margin::same(2))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.horizontal(|ui| {
+                for (v, label) in options {
+                    let sel = *value == *v;
+                    let rt =
+                        RichText::new(*label)
+                            .size(13.0)
+                            .color(if sel { p.ink } else { p.slate });
+                    let rt = if sel { rt.semibold() } else { rt };
+                    let b = egui::Button::new(rt)
+                        .fill(if sel { p.surface } else { Color32::TRANSPARENT })
+                        .stroke(if sel {
+                            Stroke::new(1.0, p.line)
+                        } else {
+                            Stroke::NONE
+                        })
+                        .corner_radius(5);
+                    if ui.add(b).clicked() && !sel {
+                        *value = *v;
+                        changed = true;
+                    }
+                }
+            });
+        });
+    changed
+}
+
+/// Status dot used at the start of list rows.
+pub fn dot(ui: &mut egui::Ui, color: Color32) {
+    let (r, _) = ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
+    ui.painter().circle_filled(r.center(), 4.0, color);
+}
+
+/// File name in the strong face with its folder muted after it.
+pub fn path_label(ui: &mut egui::Ui, path: &std::path::Path) -> egui::Response {
+    let p = of(ui);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let parent = path
+        .parent()
+        .map(|d| d.display().to_string())
+        .unwrap_or_default();
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &name,
+        0.0,
+        egui::TextFormat::simple(semibold_font(14.0), p.ink),
+    );
+    job.append(
+        &format!("  {parent}"),
+        0.0,
+        egui::TextFormat::simple(FontId::proportional(12.0), p.slate),
+    );
+    ui.add(egui::Label::new(job).truncate())
+        .on_hover_text(path.display().to_string())
 }
 
 #[cfg(test)]

@@ -80,6 +80,8 @@ pub struct Dialogs {
     pub quarantine: bool,
     pub journal_records: Option<Vec<sr_ops::JournalRecord>>,
     pub journal_job: Option<Job<Vec<sr_ops::JournalRecord>>>,
+    pub settings_section: usize,
+    pub quarantine_confirm: Option<PathBuf>,
 }
 
 pub struct App {

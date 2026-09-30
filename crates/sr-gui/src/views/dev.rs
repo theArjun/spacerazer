@@ -639,81 +639,122 @@ fn docker_section(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
+fn code_block(ui: &mut egui::Ui, text: &str) {
+    let p = theme::of(ui);
+    egui::Frame::new()
+        .fill(p.mist)
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(text).monospace().color(p.ink));
+        });
+}
+
 fn command_dialogs(app: &mut App, ctx: &egui::Context) {
     if let Some((argv, cwd)) = app.dev.confirm_cmd.clone() {
         let mut close = false;
-        egui::Modal::new(egui::Id::new("confirm_cmd")).show(ctx, |ui| {
-            ui.heading("Run clean command?");
-            ui.label("This runs the tool's own command. It is not staged in the Trash Drawer and cannot be undone from SpaceRazer.");
-            ui.label(RichText::new(argv.join(" ")).monospace());
-            ui.label(format!("in {}", cwd.display()));
-            ui.horizontal(|ui| {
+        let mut run = false;
+        theme::modal(ctx, "confirm_cmd", 460.0, |ui| {
+            let p = theme::of(ui);
+            theme::dialog_title(ui, "Run the tool's clean command?", None);
+            ui.label(RichText::new(format!("In {}", cwd.display())).color(p.slate));
+            ui.add_space(10.0);
+            code_block(ui, &argv.join(" "));
+            ui.add_space(10.0);
+            theme::callout(ui, p.warn, |ui| {
+                ui.label(
+                    RichText::new(
+                        "The tool removes files itself. This skips the Trash Drawer and cannot be undone from SpaceRazer.",
+                    )
+                    .color(p.ink),
+                );
+            });
+            theme::footer(ui, |ui| {
+                if ui.add(theme::danger(ui, "Run command")).clicked() {
+                    run = true;
+                }
                 let cancel = ui.button("Cancel");
                 cancel.request_focus();
                 if cancel.clicked() {
                     close = true;
                 }
-                if ui.add(theme::danger(ui, "Run")).clicked() {
-                    let (a, c) = (argv.clone(), cwd.clone());
-                    app.dev.cmd_job = Some(Job::spawn(ctx, "cmd", move |tx, _| {
-                        let r = match sr_devsweep::run_command(&a, &c) {
-                            Ok(out) => CmdResult {
-                                ok: out.status.success(),
-                                output: format!(
-                                    "{}{}",
-                                    String::from_utf8_lossy(&out.stdout),
-                                    String::from_utf8_lossy(&out.stderr)
-                                ),
-                                argv: a,
-                            },
-                            Err(e) => CmdResult {
-                                ok: false,
-                                output: e.to_string(),
-                                argv: a,
-                            },
-                        };
-                        tx.send(r);
-                    }));
-                    close = true;
-                }
             });
         });
+        if run {
+            let (a, c) = (argv.clone(), cwd.clone());
+            app.dev.cmd_job = Some(Job::spawn(ctx, "cmd", move |tx, _| {
+                let r = match sr_devsweep::run_command(&a, &c) {
+                    Ok(out) => CmdResult {
+                        ok: out.status.success(),
+                        output: format!(
+                            "{}{}",
+                            String::from_utf8_lossy(&out.stdout),
+                            String::from_utf8_lossy(&out.stderr)
+                        ),
+                        argv: a,
+                    },
+                    Err(e) => CmdResult {
+                        ok: false,
+                        output: e.to_string(),
+                        argv: a,
+                    },
+                };
+                tx.send(r);
+            }));
+            close = true;
+        }
         if close {
             app.dev.confirm_cmd = None;
         }
     }
     if app.dev.cmd_job.is_some() {
-        egui::Modal::new(egui::Id::new("cmd_running")).show(ctx, |ui| {
+        theme::modal(ctx, "cmd_running", 320.0, |ui| {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Running command…");
+                ui.label(RichText::new("Running command…").semibold());
             });
         });
     }
     let mut close = false;
     if let Some(r) = &app.dev.cmd_result {
-        egui::Window::new("Command output")
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.label(RichText::new(r.argv.join(" ")).monospace());
-                ui.label(if r.ok {
-                    "Finished successfully."
+        theme::modal(ctx, "cmd_output", 560.0, |ui| {
+            let p = theme::of(ui);
+            theme::dialog_title(
+                ui,
+                if r.ok {
+                    "Command finished"
                 } else {
-                    "Command failed."
+                    "Command failed"
+                },
+                (!r.ok).then_some(p.danger),
+            );
+            code_block(ui, &r.argv.join(" "));
+            ui.add_space(10.0);
+            let output = if r.output.trim().is_empty() {
+                "(no output)"
+            } else {
+                r.output.as_str()
+            };
+            egui::ScrollArea::vertical()
+                .max_height(280.0)
+                .show(ui, |ui| {
+                    ui.label(RichText::new(output).monospace().size(12.0).color(p.slate));
                 });
-                egui::ScrollArea::vertical()
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(&r.output).monospace());
-                    });
-                if ui.button("Close").clicked() {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("Sizes changed on disk. Run Analyze again to refresh them.")
+                    .size(12.0)
+                    .color(p.slate),
+            );
+            theme::footer(ui, |ui| {
+                if ui.add(theme::primary(ui, "Done")).clicked() {
                     close = true;
                 }
             });
+        });
     }
     if close {
         app.dev.cmd_result = None;
-        // Sizes changed on disk; the user can re-analyze.
-        app.log.info("Re-run Analyze to refresh sizes.", app.now);
     }
 }

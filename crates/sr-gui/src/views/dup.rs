@@ -793,50 +793,97 @@ fn link_dialogs(app: &mut App, ctx: &egui::Context) {
         .find(|f| !app.dup.marks.contains(&f.path))
         .map(|f| f.path.clone());
     let mut close = false;
-    egui::Modal::new(egui::Id::new("link_confirm")).show(ctx, |ui| {
+    let mut replace = false;
+    theme::modal(ctx, "link_confirm", 460.0, |ui| {
+        let p = theme::of(ui);
         let what = match kind {
             LinkKind::Hardlink => "hardlinks",
-            LinkKind::Reflink => "copy-on-write clones",
+            LinkKind::Reflink => "clones",
         };
-        ui.heading(format!("Replace {} files with {what}?", marked.len()));
+        theme::dialog_title(
+            ui,
+            &format!("Replace {} with {what}?", plural_files(marked.len())),
+            None,
+        );
         if let Some(k) = &keep {
-            ui.label(format!("Kept original: {}", k.display()));
+            ui.label(RichText::new("The copies will point at the file you keep:").color(p.slate));
+            ui.add_space(4.0);
+            theme::path_label(ui, k);
         }
-        if kind == LinkKind::Hardlink {
-            ui.label(
-                RichText::new("⚠ After this, all paths refer to the same file. Editing any one of them changes all of them.")
-                    .color(theme::of(ui).warn),
-            );
+        ui.add_space(12.0);
+        match kind {
+            LinkKind::Hardlink => theme::callout(ui, p.warn, |ui| {
+                ui.label(
+                    RichText::new("Afterwards every path is the same file. Editing one of them changes all of them.")
+                        .color(p.ink),
+                );
+            }),
+            LinkKind::Reflink => theme::callout(ui, p.accent, |ui| {
+                ui.label(
+                    RichText::new("Clones share space on disk but stay independent: editing one leaves the others unchanged.")
+                        .color(p.ink),
+                );
+            }),
         }
-        ui.label("Each file is replaced atomically: the link is created under a temporary name, its content is verified, then it is renamed over the copy. On any failure the copy is left untouched.");
-        ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(
+                "Each copy is swapped safely: the link is made under a temporary name and checked before it replaces the copy. If anything fails, the copy is left as it was.",
+            )
+            .size(12.0)
+            .color(p.slate),
+        );
+        theme::footer(ui, |ui| {
+            if ui
+                .add_enabled(keep.is_some(), theme::danger(ui, "Replace"))
+                .clicked()
+            {
+                replace = true;
+            }
             let cancel = ui.button("Cancel");
             cancel.request_focus();
             if cancel.clicked() {
                 close = true;
             }
-            if ui.add(theme::danger(ui, "Replace")).clicked() && keep.is_some() {
-                let keep = keep.clone().unwrap_or_default();
-                let protected = app.protected.clone();
-                let journal = app.journal.as_ref().map(|j| j.path().to_path_buf());
-                let marked = marked.clone();
-                app.dup.link_job = Some(Job::spawn(ctx, "link", move |tx, cancel| {
-                    let journal = journal.map(sr_ops::Journal::open);
-                    for p in marked {
-                        if cancel.is_cancelled() {
-                            return;
-                        }
-                        let result = sr_ops::snapshot(&p, Module::DuplicateLens, "Duplicate copy")
-                            .and_then(|snap| sr_ops::replace_with_link(&keep, &snap, kind, &protected, journal.as_ref()))
-                            .map_err(|e| e.to_string());
-                        tx.send(LinkOutcome { path: p, result });
-                    }
-                }));
-                close = true;
-            }
         });
     });
+    if replace {
+        if let Some(keep) = keep.clone() {
+            let protected = app.protected.clone();
+            let journal = app.journal.as_ref().map(|j| j.path().to_path_buf());
+            let marked = marked.clone();
+            app.dup.link_job = Some(Job::spawn(ctx, "link", move |tx, cancel| {
+                let journal = journal.map(sr_ops::Journal::open);
+                for p in marked {
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+                    let result = sr_ops::snapshot(&p, Module::DuplicateLens, "Duplicate copy")
+                        .and_then(|snap| {
+                            sr_ops::replace_with_link(
+                                &keep,
+                                &snap,
+                                kind,
+                                &protected,
+                                journal.as_ref(),
+                            )
+                        })
+                        .map_err(|e| e.to_string());
+                    tx.send(LinkOutcome { path: p, result });
+                }
+            }));
+        }
+        close = true;
+    }
     if close {
         app.dup.link_confirm = None;
+    }
+}
+
+fn plural_files(n: usize) -> String {
+    if n == 1 {
+        "1 copy".into()
+    } else {
+        format!("{n} copies")
     }
 }

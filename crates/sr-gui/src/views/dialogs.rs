@@ -3,14 +3,15 @@
 
 use std::path::PathBuf;
 
-use egui::RichText;
+use egui::{RichText, Stroke};
+use egui_extras::{Column, TableBuilder};
 use sr_cli::settings::Theme;
 use sr_core::{Module, SizeMode, SizeUnits};
 use sr_ops::{JournalRecord, Method, Outcome};
 
-use crate::app::{Action, App, method_label};
+use crate::app::{Action, App};
 use crate::theme::{self, Typo};
-use crate::util::{Job, Level, format_date};
+use crate::util::{Job, Level, format_date, group_digits};
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
     confirm(app, ctx);
@@ -24,56 +25,126 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     settings(app, ctx);
 }
 
+fn plural(n: usize, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{} {many}", group_digits(n as u64))
+    }
+}
+
+// ------------------------------------------------------------- confirm
+
 /// Confirmation before executing the drawer (FR-TRASH-06, UI-6).
 fn confirm(app: &mut App, ctx: &egui::Context) {
     let Some(method) = app.dialogs.confirm else {
         return;
     };
     let items = app.drawer.items().to_vec();
-    let n = items.len();
     let bytes = app.drawer.reclaimable();
     let heavy = sr_ops::permanent_delete_threshold_exceeded(
         &items,
         app.settings.confirm_bytes_threshold,
         app.settings.confirm_count_threshold,
     );
+    let permanent = method == Method::Permanent;
+    let need_typed = permanent && heavy;
     let mut close = false;
     let mut go = false;
-    egui::Modal::new(egui::Id::new("confirm_exec")).show(ctx, |ui| {
-        ui.set_max_width(460.0);
-        match method {
-            Method::Permanent => {
-                ui.label(RichText::new("Delete permanently?").display_bold(22.0).color(theme::of(ui).danger));
-                ui.label(format!("{n} items, {} will be deleted. This cannot be undone.", app.fmt(bytes)));
-            }
-            _ => {
-                ui.label(RichText::new("Move to Trash?").display_bold(22.0));
-                ui.label(format!("{n} items, {} will be moved to the trash.", app.fmt(bytes)));
-                ui.label(RichText::new("You can restore them from the system trash (or SpaceRazer's quarantine).").weak());
-            }
+
+    theme::modal(ctx, "confirm_exec", 440.0, |ui| {
+        let p = theme::of(ui);
+        if permanent {
+            theme::dialog_title(ui, "Delete permanently?", Some(p.danger));
+        } else {
+            theme::dialog_title(ui, "Move to Trash?", None);
         }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(app.fmt(bytes))
+                    .display_bold(34.0)
+                    .color(p.ink),
+            );
+            ui.label(
+                RichText::new(format!("from {}", plural(items.len(), "item", "items")))
+                    .color(p.slate),
+            );
+        });
+
+        // Breakdown by the module that staged each item.
         let mut by_source = std::collections::BTreeMap::<&str, (usize, u64)>::new();
         for it in &items {
             let e = by_source.entry(it.source.label()).or_default();
             e.0 += 1;
             e.1 += it.allocated;
         }
+        ui.add_space(6.0);
         for (src, (c, b)) in by_source {
-            ui.label(RichText::new(format!("  {src}: {c} items, {}", app.fmt(b))).weak());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(src).color(p.slate));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(app.fmt(b)).color(p.ink));
+                    ui.label(RichText::new(plural(c, "item", "items")).color(p.slate));
+                });
+            });
         }
-        ui.label(RichText::new("Each item is re-checked just before it is removed; anything that changed since staging is skipped.").small().weak());
-        let need_typed = method == Method::Permanent && heavy;
-        if need_typed {
-            ui.add_space(6.0);
-            ui.label(format!(
-                "This exceeds your safety threshold ({} or {} items). Type DELETE to confirm:",
-                app.fmt(app.settings.confirm_bytes_threshold),
-                app.settings.confirm_count_threshold
-            ));
-            ui.text_edit_singleline(&mut app.dialogs.confirm_text);
+        ui.add_space(12.0);
+
+        if permanent {
+            theme::callout(ui, p.danger, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Permanently deleted items skip the trash and cannot be recovered.",
+                    )
+                    .color(p.ink),
+                );
+            });
+        } else {
+            theme::callout(ui, p.accent, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Items go to the system trash, or to SpaceRazer's quarantine on disks without one. You can restore them from there.",
+                    )
+                    .color(p.ink),
+                );
+            });
         }
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("Each item is checked again just before removal. Anything that changed since you staged it is skipped.")
+                .size(12.0)
+                .color(p.slate),
+        );
+
+        if need_typed {
+            ui.add_space(14.0);
+            ui.label(
+                RichText::new(format!(
+                    "This is over your safety limit of {} or {}. Type DELETE to continue.",
+                    app.fmt(app.settings.confirm_bytes_threshold),
+                    plural(app.settings.confirm_count_threshold, "item", "items")
+                ))
+                .color(p.ink),
+            );
+            ui.add_space(4.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut app.dialogs.confirm_text)
+                    .hint_text("DELETE")
+                    .desired_width(f32::INFINITY),
+            );
+        }
+
+        theme::footer(ui, |ui| {
+            let ok = !need_typed || app.dialogs.confirm_text.trim() == "DELETE";
+            let button = if permanent {
+                theme::danger(ui, "Delete permanently")
+            } else {
+                theme::primary(ui, "Move to Trash")
+            };
+            if ui.add_enabled(ok, button).clicked() {
+                go = true;
+            }
             // The safe choice holds focus; destructive is never the default.
             let cancel = ui.button("Cancel");
             if !need_typed {
@@ -81,14 +152,6 @@ fn confirm(app: &mut App, ctx: &egui::Context) {
             }
             if cancel.clicked() {
                 close = true;
-            }
-            let ok = !need_typed || app.dialogs.confirm_text.trim() == "DELETE";
-            let button = match method {
-                Method::Permanent => theme::danger(ui, "Delete permanently"),
-                _ => theme::primary(ui, "Move to Trash"),
-            };
-            if ui.add_enabled(ok, button).clicked() {
-                go = true;
             }
         });
     });
@@ -102,91 +165,141 @@ fn confirm(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+// -------------------------------------------------------------- report
+
 /// Final report (FR-TRASH-05/08).
 fn report(app: &mut App, ctx: &egui::Context) {
-    let Some(r) = &app.dialogs.report else { return };
-    let mut open = true;
-    let title = if r.method == Method::DryRun {
-        "Dry run report"
-    } else {
-        "Execution report"
+    let Some(r) = app.dialogs.report.clone() else {
+        return;
     };
-    egui::Window::new(title)
-        .open(&mut open)
-        .default_width(640.0)
-        .show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(method_label(r.method)).semibold());
-                if r.method == Method::DryRun {
-                    ui.label(format!(
-                        "{} operations, {} would be freed, nothing was changed",
-                        r.succeeded,
-                        app.fmt(r.bytes_freed)
-                    ));
-                } else {
-                    ui.label(format!(
-                        "{} succeeded, {} skipped, {} failed, {} freed",
-                        r.succeeded,
-                        r.skipped,
-                        r.failed,
-                        app.fmt(r.bytes_freed)
-                    ));
-                }
-                if r.cancelled {
-                    ui.label(RichText::new("cancelled").italics());
-                }
+    let mut open = true;
+    let dry = r.method == Method::DryRun;
+    let (title, subtitle) = match r.method {
+        Method::DryRun => ("Dry run", "Nothing was changed. This is what would happen."),
+        Method::Trash => (
+            "Moved to Trash",
+            "Recoverable from the system trash or quarantine.",
+        ),
+        Method::Permanent => ("Deleted permanently", "These items are gone."),
+    };
+    theme::window(
+        ctx,
+        "report",
+        title,
+        Some(subtitle),
+        640.0,
+        &mut open,
+        |ui| {
+            let p = theme::of(ui);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 32.0;
+                theme::stat(
+                    ui,
+                    &app.fmt(r.bytes_freed),
+                    if dry { "would be freed" } else { "freed" },
+                    p.ink,
+                );
+                theme::stat(
+                    ui,
+                    &group_digits(r.succeeded as u64),
+                    if dry { "ready" } else { "done" },
+                    p.ok,
+                );
+                theme::stat(
+                    ui,
+                    &group_digits(r.skipped as u64),
+                    "skipped",
+                    if r.skipped > 0 { p.warn } else { p.slate },
+                );
+                theme::stat(
+                    ui,
+                    &group_digits(r.failed as u64),
+                    "failed",
+                    if r.failed > 0 { p.danger } else { p.slate },
+                );
             });
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .max_height(360.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("report")
-                        .striped(true)
-                        .num_columns(2)
-                        .show(ui, |ui| {
-                            for e in &r.entries {
-                                let (txt, color) = match &e.outcome {
-                                    Outcome::Done {
-                                        bytes_freed,
-                                        destination,
-                                    } => (
-                                        match destination {
-                                            Some(d) => format!(
-                                                "✔ {} → {}",
-                                                app.fmt(*bytes_freed),
-                                                d.display()
-                                            ),
-                                            None => format!("✔ {}", app.fmt(*bytes_freed)),
-                                        },
-                                        theme::of(ui).ok,
-                                    ),
-                                    Outcome::WouldDo { operation, bytes } => (
-                                        format!("{operation} ({})", app.fmt(*bytes)),
-                                        ui.visuals().text_color(),
-                                    ),
-                                    Outcome::Skipped { reason } => {
-                                        (format!("skipped: {reason}"), theme::of(ui).warn)
-                                    }
-                                    Outcome::Failed { error } => {
-                                        (format!("failed: {error}"), ui.visuals().error_fg_color)
-                                    }
-                                };
-                                ui.label(e.path.display().to_string());
-                                ui.label(RichText::new(txt).color(color));
-                                ui.end_row();
+            if r.cancelled {
+                ui.add_space(8.0);
+                theme::tag(ui, "Cancelled before every item was processed", p.warn);
+            }
+            ui.add_space(14.0);
+            let row_h = 40.0;
+            TableBuilder::new(ui)
+                .striped(false)
+                .max_scroll_height(360.0)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .column(Column::exact(16.0))
+                .column(Column::remainder().at_least(200.0).clip(true))
+                .column(Column::auto().at_least(120.0))
+                .body(|body| {
+                    body.rows(row_h, r.entries.len(), |mut row| {
+                        let e = &r.entries[row.index()];
+                        let (color, detail, note) = match &e.outcome {
+                            Outcome::Done {
+                                bytes_freed,
+                                destination,
+                            } => (
+                                p.ok,
+                                app.fmt(*bytes_freed),
+                                destination
+                                    .as_ref()
+                                    .map(|d| format!("Now at {}", d.display())),
+                            ),
+                            Outcome::WouldDo { operation, bytes } => {
+                                (p.accent, app.fmt(*bytes), Some(operation.clone()))
                             }
+                            Outcome::Skipped { reason } => {
+                                (p.warn, "Skipped".into(), Some(reason.clone()))
+                            }
+                            Outcome::Failed { error } => {
+                                (p.danger, "Failed".into(), Some(error.clone()))
+                            }
+                        };
+                        row.col(|ui| theme::dot(ui, color));
+                        row.col(|ui| {
+                            ui.vertical(|ui| {
+                                theme::path_label(ui, &e.path);
+                                if let Some(n) = &note {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(n).size(12.0).color(p.slate),
+                                        )
+                                        .truncate(),
+                                    );
+                                }
+                            });
                         });
+                        row.col(|ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(RichText::new(detail).semibold().color(color));
+                                },
+                            );
+                        });
+                    });
                 });
-            if r.method != Method::DryRun && r.skipped + r.failed > 0 {
+            if !dry && r.skipped + r.failed > 0 {
+                ui.add_space(10.0);
                 ui.label(
-                    RichText::new("Skipped and failed items stay in the Trash Drawer.").weak(),
+                    RichText::new("Skipped and failed items stay in the Trash Drawer.")
+                        .size(12.0)
+                        .color(p.slate),
                 );
             }
-        });
+            theme::footer(ui, |ui| {
+                if ui.add(theme::primary(ui, "Done")).clicked() {
+                    app.dialogs.report = None;
+                }
+            });
+        },
+    );
     if !open {
         app.dialogs.report = None;
     }
 }
+
+// ------------------------------------------------------------- journal
 
 fn journal(app: &mut App, ctx: &egui::Context) {
     if !app.dialogs.journal {
@@ -212,82 +325,107 @@ fn journal(app: &mut App, ctx: &egui::Context) {
             }
         }
     }
-    let loaded = app.dialogs.journal_records.as_ref();
+    let records = app.dialogs.journal_records.clone();
     let mut open = true;
     let mut restore: Option<JournalRecord> = None;
-    egui::Window::new("Operation journal")
-        .open(&mut open)
-        .default_width(720.0)
-        .show(ctx, |ui| {
-            if let Some(j) = &app.journal {
-                ui.label(
-                    RichText::new(j.path().display().to_string())
-                        .weak()
-                        .monospace(),
-                );
-            }
-            match loaded {
+    let subtitle = app.journal.as_ref().map(|j| {
+        format!(
+            "Every change SpaceRazer made, newest first. Saved in {}",
+            j.path().display()
+        )
+    });
+    theme::window(
+        ctx,
+        "journal",
+        "Operation journal",
+        subtitle.as_deref(),
+        760.0,
+        &mut open,
+        |ui| {
+            let p = theme::of(ui);
+            match &records {
                 None => {
                     ui.spinner();
                 }
                 Some(v) if v.is_empty() => {
-                    ui.label("No operations recorded yet.");
+                    ui.add_space(20.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(RichText::new("No changes yet").display(18.0).color(p.ink));
+                        ui.label(
+                            RichText::new(
+                                "Items you remove from the Trash Drawer are recorded here.",
+                            )
+                            .color(p.slate),
+                        );
+                    });
+                    ui.add_space(20.0);
                 }
                 Some(v) => {
-                    egui::ScrollArea::vertical()
-                        .max_height(420.0)
-                        .show(ui, |ui| {
-                            egui::Grid::new("journal")
-                                .striped(true)
-                                .num_columns(6)
-                                .show(ui, |ui| {
-                                    for h in ["When", "Operation", "Path", "Size", "Result", ""] {
-                                        theme::column_header(ui, h);
-                                    }
-                                    ui.end_row();
-                                    for r in v.iter().rev().take(2000) {
-                                        ui.label(format_date(r.timestamp));
-                                        ui.label(&r.operation);
-                                        ui.label(r.path.display().to_string()).on_hover_text(
-                                            r.destination
-                                                .as_ref()
-                                                .map(|d| format!("→ {}", d.display()))
-                                                .unwrap_or_default(),
+                    let rows: Vec<&JournalRecord> = v.iter().rev().take(2000).collect();
+                    TableBuilder::new(ui)
+                        .striped(true)
+                        .max_scroll_height(440.0)
+                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                        .column(Column::exact(16.0))
+                        .column(Column::auto().at_least(86.0))
+                        .column(Column::auto().at_least(110.0))
+                        .column(Column::remainder().at_least(200.0).clip(true))
+                        .column(Column::auto().at_least(70.0))
+                        .column(Column::auto().at_least(70.0))
+                        .header(22.0, |mut h| {
+                            for t in ["", "Date", "Operation", "Item", "Size", ""] {
+                                h.col(|ui| theme::column_header(ui, t));
+                            }
+                        })
+                        .body(|body| {
+                            body.rows(30.0, rows.len(), |mut row| {
+                                let r = rows[row.index()];
+                                row.col(|ui| {
+                                    theme::dot(ui, if r.succeeded() { p.ok } else { p.danger })
+                                });
+                                row.col(|ui| {
+                                    ui.label(
+                                        RichText::new(format_date(r.timestamp)).color(p.slate),
+                                    );
+                                });
+                                row.col(|ui| {
+                                    ui.label(&r.operation);
+                                });
+                                row.col(|ui| {
+                                    let resp = theme::path_label(ui, &r.path);
+                                    if !r.succeeded() {
+                                        resp.on_hover_text(
+                                            r.error.clone().unwrap_or_else(|| r.result.clone()),
                                         );
-                                        ui.label(app.fmt(r.size));
-                                        if r.succeeded() {
-                                            ui.label("ok");
-                                        } else {
-                                            ui.label(
-                                                RichText::new(
-                                                    r.error
-                                                        .clone()
-                                                        .unwrap_or_else(|| r.result.clone()),
-                                                )
-                                                .color(ui.visuals().error_fg_color),
-                                            );
-                                        }
-                                        let restorable = r.succeeded()
-                                            && r.destination.as_ref().is_some_and(|d| {
-                                                d.components().any(|c| {
-                                                    c.as_os_str() == sr_ops::QUARANTINE_DIR_NAME
-                                                })
-                                            });
-                                        if restorable
-                                            && ui
-                                                .small_button("Restore")
-                                                .on_hover_text("Move back from quarantine")
-                                                .clicked()
-                                        {
-                                            restore = Some(r.clone());
-                                        }
-                                        ui.end_row();
                                     }
                                 });
+                                row.col(|ui| {
+                                    ui.label(app.fmt(r.size));
+                                });
+                                row.col(|ui| {
+                                    let restorable = r.succeeded()
+                                        && r.destination.as_ref().is_some_and(|d| {
+                                            d.components().any(|c| {
+                                                c.as_os_str() == sr_ops::QUARANTINE_DIR_NAME
+                                            })
+                                        });
+                                    if restorable
+                                        && ui
+                                            .button("Restore")
+                                            .on_hover_text(
+                                                "Move back from quarantine to its original place",
+                                            )
+                                            .clicked()
+                                    {
+                                        restore = Some(r.clone());
+                                    }
+                                });
+                            });
                         });
                 }
             }
-        });
+        },
+    );
     if let Some(r) = restore {
         match sr_ops::restore_from_quarantine(&r) {
             Ok(()) => {
@@ -304,40 +442,74 @@ fn journal(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+// ---------------------------------------------------------- quarantine
+
 fn quarantine(app: &mut App, ctx: &egui::Context) {
     if !app.dialogs.quarantine {
         return;
     }
     let mut open = true;
     let dirs = sr_ops::quarantine_dirs();
-    egui::Window::new("Quarantine").open(&mut open).show(ctx, |ui| {
-        ui.label("Where no OS trash is available, SpaceRazer moves items into a quarantine folder on the same volume. Space is only freed once the quarantine is emptied.");
-        if dirs.is_empty() {
-            ui.label(RichText::new("No quarantine folders exist.").weak());
-        }
-        for d in &dirs {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(d.display().to_string()).monospace());
-                if ui.button("Reveal").clicked() {
-                    app.actions.push(Action::Reveal(d.clone()));
-                }
-                if ui
-                    .add(theme::danger(ui, "Empty"))
-                    .on_hover_text("Permanently deletes everything in this quarantine folder")
-                    .clicked()
-                {
-                    match sr_ops::empty_quarantine(d) {
-                        Ok(b) => app.log.info(format!("Emptied quarantine, {} freed", app.fmt(b)), app.now),
-                        Err(e) => app.log.error(format!("Could not empty quarantine: {e}"), app.now),
-                    }
-                }
-            });
-        }
-    });
+    theme::window(
+        ctx,
+        "quarantine",
+        "Quarantine",
+        Some(
+            "On disks without a system trash, removed items are held here. Space is freed when you empty it.",
+        ),
+        600.0,
+        &mut open,
+        |ui| {
+            let p = theme::of(ui);
+            if dirs.is_empty() {
+                ui.label(RichText::new("Nothing is in quarantine.").color(p.slate));
+            }
+            for d in &dirs {
+                ui.horizontal(|ui| {
+                    theme::path_label(ui, d);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let confirming = app.dialogs.quarantine_confirm.as_ref() == Some(d);
+                        if confirming {
+                            if ui.add(theme::danger(ui, "Empty now")).clicked() {
+                                match sr_ops::empty_quarantine(d) {
+                                    Ok(b) => app.log.info(
+                                        format!("Emptied quarantine, {} freed", app.fmt(b)),
+                                        app.now,
+                                    ),
+                                    Err(e) => app
+                                        .log
+                                        .error(format!("Could not empty quarantine: {e}"), app.now),
+                                }
+                                app.dialogs.quarantine_confirm = None;
+                            }
+                            if ui.button("Keep").clicked() {
+                                app.dialogs.quarantine_confirm = None;
+                            }
+                            ui.label(
+                                RichText::new("Permanently delete everything here?")
+                                    .color(p.danger),
+                            );
+                        } else {
+                            if ui.add(theme::danger(ui, "Empty…")).clicked() {
+                                app.dialogs.quarantine_confirm = Some(d.clone());
+                            }
+                            if ui.button("Reveal").clicked() {
+                                app.actions.push(Action::Reveal(d.clone()));
+                            }
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+            }
+        },
+    );
     if !open {
         app.dialogs.quarantine = false;
+        app.dialogs.quarantine_confirm = None;
     }
 }
+
+// -------------------------------------------------------------- issues
 
 fn issues(app: &mut App, ctx: &egui::Context) {
     if !app.dialogs.issues {
@@ -350,35 +522,62 @@ fn issues(app: &mut App, ctx: &egui::Context) {
     let tree = scan.tree().clone();
     let t = tree.read().unwrap_or_else(|e| e.into_inner());
     let mut open = true;
-    egui::Window::new(format!("Scan issues ({})", t.issues.len()))
-        .open(&mut open)
-        .default_width(640.0)
-        .show(ctx, |ui| {
+    let subtitle = format!(
+        "{} could not be read. Their sizes are not included.",
+        plural(t.issues.len(), "location", "locations")
+    );
+    theme::window(
+        ctx,
+        "issues",
+        "Unreadable locations",
+        Some(&subtitle),
+        680.0,
+        &mut open,
+        |ui| {
+            let p = theme::of(ui);
             let denied = t.issues.iter().any(|i| {
                 let e = i.error.to_lowercase();
-                e.contains("not permitted") || e.contains("permission denied") || e.contains("access is denied")
+                e.contains("not permitted")
+                    || e.contains("permission denied")
+                    || e.contains("access is denied")
             });
-            if denied {
-                ui.label(if cfg!(target_os = "macos") {
-                    "Some locations could not be read. On macOS, grant SpaceRazer Full Disk Access (System Settings → Privacy & Security) and rescan."
-                } else {
-                    "Some locations could not be read due to permissions. Their size is not included."
+            if denied && cfg!(target_os = "macos") {
+                theme::callout(ui, p.warn, |ui| {
+                    ui.label(
+                    RichText::new(
+                        "macOS blocked some folders. Grant SpaceRazer Full Disk Access in System Settings › Privacy & Security, then rescan.",
+                    )
+                    .color(p.ink),
+                );
                 });
-                ui.separator();
+                ui.add_space(10.0);
             }
-            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                for i in t.issues.iter().take(5000) {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(i.path.display().to_string()).monospace());
-                        ui.label(RichText::new(&i.error).weak());
+            let rows: Vec<_> = t.issues.iter().take(5000).collect();
+            TableBuilder::new(ui)
+                .striped(true)
+                .max_scroll_height(400.0)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .column(Column::remainder().at_least(260.0).clip(true))
+                .column(Column::auto().at_least(160.0).clip(true))
+                .body(|body| {
+                    body.rows(28.0, rows.len(), |mut row| {
+                        let i = rows[row.index()];
+                        row.col(|ui| {
+                            theme::path_label(ui, &i.path);
+                        });
+                        row.col(|ui| {
+                            ui.label(RichText::new(&i.error).size(12.0).color(p.slate));
+                        });
                     });
-                }
-            });
-        });
+                });
+        },
+    );
     if !open {
         app.dialogs.issues = false;
     }
 }
+
+// ------------------------------------------------------------- largest
 
 fn largest(app: &mut App, ctx: &egui::Context) {
     let Some(ids) = app.dialogs.largest.clone() else {
@@ -387,56 +586,77 @@ fn largest(app: &mut App, ctx: &egui::Context) {
     let Some(scan) = &app.scan else { return };
     let tree = scan.tree().clone();
     let t = tree.read().unwrap_or_else(|e| e.into_inner());
+    let rows: Vec<_> = ids
+        .iter()
+        .copied()
+        .filter(|&id| !t.node(id).flags.contains(sr_core::NodeFlags::REMOVED))
+        .collect();
     let mut open = true;
-    egui::Window::new("Top 100 largest files")
-        .open(&mut open)
-        .default_width(640.0)
-        .show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(480.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("largest")
-                        .striped(true)
-                        .num_columns(4)
-                        .show(ui, |ui| {
-                            for (i, &id) in ids.iter().enumerate() {
-                                let node = t.node(id);
-                                if node.flags.contains(sr_core::NodeFlags::REMOVED) {
-                                    continue;
+    theme::window(
+        ctx,
+        "largest",
+        "Largest files",
+        Some("The 100 biggest files in this scan. Right-click a row for more."),
+        680.0,
+        &mut open,
+        |ui| {
+            let p = theme::of(ui);
+            TableBuilder::new(ui)
+                .striped(true)
+                .max_scroll_height(480.0)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .column(Column::exact(34.0))
+                .column(Column::auto().at_least(84.0))
+                .column(Column::remainder().at_least(240.0).clip(true))
+                .column(Column::auto().at_least(70.0))
+                .body(|body| {
+                    body.rows(30.0, rows.len(), |mut row| {
+                        let i = row.index();
+                        let id = rows[i];
+                        let path = t.path(id);
+                        row.col(|ui| {
+                            ui.label(RichText::new(format!("{}", i + 1)).color(p.slate));
+                        });
+                        row.col(|ui| {
+                            ui.label(
+                                RichText::new(app.fmt(t.node(id).size(app.settings.size_mode)))
+                                    .display(15.0)
+                                    .color(p.ink),
+                            );
+                        });
+                        row.col(|ui| {
+                            theme::path_label(ui, &path).context_menu(|ui| {
+                                if ui.button("Reveal in file manager").clicked() {
+                                    app.actions.push(Action::Reveal(path.clone()));
+                                    ui.close();
                                 }
-                                let path = t.path(id);
-                                ui.label(format!("{}.", i + 1));
-                                ui.label(app.fmt(node.size(app.settings.size_mode)));
-                                ui.label(path.display().to_string()).context_menu(|ui| {
-                                    if ui.button("Reveal in file manager").clicked() {
-                                        app.actions.push(Action::Reveal(path.clone()));
-                                        ui.close();
-                                    }
-                                    if ui.button("Show in chart").clicked() {
-                                        app.actions.push(Action::ShowInMap(path.clone()));
-                                        ui.close();
-                                    }
+                                if ui.button("Show in chart").clicked() {
+                                    app.actions.push(Action::ShowInMap(path.clone()));
+                                    ui.close();
+                                }
+                            });
+                        });
+                        row.col(|ui| {
+                            if app.drawer.covers(&path) {
+                                ui.label(RichText::new("Staged").color(p.slate));
+                            } else if ui.button("Stage").clicked() {
+                                app.actions.push(Action::Stage {
+                                    paths: vec![path.clone()],
+                                    source: Module::SpaceMap,
+                                    reason: "Large file".into(),
                                 });
-                                let staged = app.drawer.covers(&path);
-                                if ui
-                                    .add_enabled(!staged, egui::Button::new("Stage").small())
-                                    .clicked()
-                                {
-                                    app.actions.push(Action::Stage {
-                                        paths: vec![path.clone()],
-                                        source: Module::SpaceMap,
-                                        reason: "Large file".into(),
-                                    });
-                                }
-                                ui.end_row();
                             }
                         });
+                    });
                 });
-        });
+        },
+    );
     if !open {
         app.dialogs.largest = None;
     }
 }
+
+// ----------------------------------------------------------------- log
 
 pub fn diagnostics(app: &App) -> String {
     let mut s = format!(
@@ -481,158 +701,194 @@ fn log(app: &mut App, ctx: &egui::Context) {
         return;
     }
     let mut open = true;
-    egui::Window::new("Log")
-        .open(&mut open)
-        .default_width(640.0)
-        .show(ctx, |ui| {
-            if ui.button("Copy diagnostics").clicked() {
-                ctx.copy_text(diagnostics(app));
+    let mut copy = false;
+    theme::window(
+        ctx,
+        "log",
+        "Activity log",
+        Some("What SpaceRazer did this session. File contents are never logged."),
+        640.0,
+        &mut open,
+        |ui| {
+            let p = theme::of(ui);
+            if app.log.lines.is_empty() {
+                ui.label(RichText::new("Nothing logged yet.").color(p.slate));
             }
             egui::ScrollArea::vertical()
-                .max_height(420.0)
+                .max_height(400.0)
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     for l in &app.log.lines {
                         let color = match l.level {
-                            Level::Info => ui.visuals().text_color(),
-                            Level::Warn => theme::of(ui).warn,
-                            Level::Error => ui.visuals().error_fg_color,
+                            Level::Info => p.accent,
+                            Level::Warn => p.warn,
+                            Level::Error => p.danger,
                         };
-                        ui.label(
-                            RichText::new(format!("{}  {}", format_date(l.at), l.msg)).color(color),
-                        );
+                        ui.horizontal(|ui| {
+                            theme::dot(ui, color);
+                            ui.label(RichText::new(format_date(l.at)).size(12.0).color(p.slate));
+                            ui.add(egui::Label::new(RichText::new(&l.msg).color(p.ink)).wrap());
+                        });
                     }
                 });
-        });
+            theme::footer(ui, |ui| {
+                if ui
+                    .button("Copy diagnostics")
+                    .on_hover_text("Version, platform, settings and this log, for bug reports")
+                    .clicked()
+                {
+                    copy = true;
+                }
+            });
+        },
+    );
+    if copy {
+        ctx.copy_text(diagnostics(app));
+        app.log.info("Diagnostics copied to clipboard", app.now);
+    }
     if !open {
         app.dialogs.log = false;
     }
 }
 
+// ---------------------------------------------------------------- help
+
+/// Key combination and what it does.
+type Shortcut<'a> = (Vec<&'a str>, &'a str);
+
 fn help(app: &mut App, ctx: &egui::Context) {
     if !app.dialogs.help {
         return;
     }
+    let cmd = if cfg!(target_os = "macos") {
+        "⌘"
+    } else {
+        "Ctrl"
+    };
+    let groups: [(&str, Vec<Shortcut>); 2] = [
+        (
+            "Anywhere",
+            vec![
+                (vec![cmd, "1"], "Space Map"),
+                (vec![cmd, "2"], "DevSweep"),
+                (vec![cmd, "3"], "DuplicateLens"),
+                (vec![cmd, "F"], "Search the scan"),
+                (vec![cmd, "R"], "Rescan"),
+                (vec!["Esc"], "Close dialog, or cancel the running job"),
+                (vec!["?"], "Show these shortcuts"),
+            ],
+        ),
+        (
+            "Space Map",
+            vec![
+                (vec!["←", "→"], "Previous or next item in the ring"),
+                (vec!["↑"], "Move outward, into the selected folder's ring"),
+                (vec!["↓"], "Move inward, to the parent"),
+                (vec!["Enter"], "Open the selected folder"),
+                (vec!["Backspace"], "Go up one level"),
+                (vec!["Delete"], "Send the selection to the Trash Drawer"),
+            ],
+        ),
+    ];
     let mut open = true;
-    egui::Window::new("Keyboard shortcuts")
-        .open(&mut open)
-        .collapsible(false)
-        .show(ctx, |ui| {
-            egui::Grid::new("keys").striped(true).show(ui, |ui| {
-                for (k, v) in [
-                    ("Ctrl/Cmd + 1/2/3", "Switch module"),
-                    (
-                        "Arrow keys",
-                        "Move selection between arcs (←/→ siblings, ↑ outward, ↓ inward)",
-                    ),
-                    ("Enter", "Zoom into selected directory"),
-                    ("Backspace", "Zoom out one level"),
-                    ("Delete", "Stage selection in Trash Drawer"),
-                    ("Ctrl/Cmd + F", "Search"),
-                    ("Ctrl/Cmd + R", "Rescan current root"),
-                    ("Esc", "Close dialog / cancel running job"),
-                    ("?", "This overlay"),
-                ] {
-                    ui.label(RichText::new(k).monospace().semibold());
-                    ui.label(v);
-                    ui.end_row();
-                }
-            });
-        });
+    theme::window(
+        ctx,
+        "help",
+        "Keyboard shortcuts",
+        None,
+        520.0,
+        &mut open,
+        |ui| {
+            let p = theme::of(ui);
+            for (title, rows) in &groups {
+                ui.label(RichText::new(*title).semibold().color(p.slate));
+                ui.add_space(4.0);
+                egui::Grid::new(("keys", *title))
+                    .num_columns(2)
+                    .spacing([18.0, 8.0])
+                    .min_col_width(130.0)
+                    .show(ui, |ui| {
+                        for (keys, what) in rows {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                for k in keys {
+                                    theme::keycap(ui, k);
+                                }
+                            });
+                            ui.label(RichText::new(*what).color(p.ink));
+                            ui.end_row();
+                        }
+                    });
+                ui.add_space(14.0);
+            }
+        },
+    );
     if !open {
         app.dialogs.help = false;
     }
 }
+
+// ------------------------------------------------------------ settings
+
+const SECTIONS: [&str; 5] = [
+    "Appearance",
+    "Scanning",
+    "Safety",
+    "DevSweep",
+    "DuplicateLens",
+];
 
 fn settings(app: &mut App, ctx: &egui::Context) {
     if !app.dialogs.settings {
         return;
     }
     let mut open = true;
-    let mut changed = false;
     let before = format!("{:?}", app.settings);
-    egui::Window::new("Settings").open(&mut open).default_width(520.0).vscroll(true).show(ctx, |ui| {
-        let s = &mut app.settings;
-        egui::CollapsingHeader::new("Appearance").default_open(true).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Theme");
-                ui.selectable_value(&mut s.theme, Theme::System, "System");
-                ui.selectable_value(&mut s.theme, Theme::Light, "Light");
-                ui.selectable_value(&mut s.theme, Theme::Dark, "Dark");
+    let stored = sr_cli::settings::Settings::default_path()
+        .map(|p| format!("Saved automatically to {}", p.display()));
+    theme::window(
+        ctx,
+        "settings",
+        "Settings",
+        stored.as_deref(),
+        760.0,
+        &mut open,
+        |ui| {
+            let p = theme::of(ui);
+            ui.horizontal_top(|ui| {
+                // Section list.
+                ui.vertical(|ui| {
+                    ui.set_width(150.0);
+                    for (i, name) in SECTIONS.iter().enumerate() {
+                        let sel = app.dialogs.settings_section == i;
+                        let rt = RichText::new(*name).color(if sel { p.ink } else { p.slate });
+                        let b = egui::Button::new(if sel { rt.semibold() } else { rt })
+                            .fill(if sel {
+                                p.mist
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            })
+                            .frame_when_inactive(sel)
+                            .min_size(egui::vec2(150.0, 30.0));
+                        if ui.add(b).clicked() {
+                            app.dialogs.settings_section = i;
+                        }
+                    }
+                });
+                let r = ui.available_rect_before_wrap();
+                ui.painter()
+                    .vline(r.left(), r.y_range(), Stroke::new(1.0, p.line));
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(480.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| settings_section(app, ui));
+                });
             });
-            ui.checkbox(&mut s.high_contrast, "High-contrast chart palette");
-            ui.checkbox(&mut s.reduce_motion, "Reduce motion (disable zoom animations)");
-            ui.add(egui::Slider::new(&mut s.animation_ms, 0..=1000).text("zoom animation (ms)"));
-            ui.add(egui::Slider::new(&mut s.rings, 2..=10).text("rings"));
-            ui.add(egui::Slider::new(&mut s.min_arc_degrees, 0.1..=5.0).text("min arc angle (°)"));
-            ui.horizontal(|ui| {
-                ui.label("Sizes");
-                ui.selectable_value(&mut s.size_mode, SizeMode::Allocated, "On disk (allocated)");
-                ui.selectable_value(&mut s.size_mode, SizeMode::Apparent, "Apparent");
-            });
-            ui.horizontal(|ui| {
-                ui.label("Units");
-                ui.selectable_value(&mut s.size_units, SizeUnits::Binary, "Binary (GiB)");
-                ui.selectable_value(&mut s.size_units, SizeUnits::Decimal, "Decimal (GB)");
-            });
-        });
-        egui::CollapsingHeader::new("Scanning").default_open(true).show(ui, |ui| {
-            ui.checkbox(&mut s.follow_symlinks, "Follow symlinks / junctions (with cycle detection)");
-            ui.checkbox(&mut s.cross_filesystems, "Cross filesystem boundaries");
-            let mut threads = s.scan_threads.unwrap_or(0);
-            if ui.add(egui::Slider::new(&mut threads, 0..=64).text("scan threads (0 = auto)")).changed() {
-                s.scan_threads = (threads > 0).then_some(threads);
-            }
-            path_list(ui, "Excluded paths", &mut s.exclude_paths);
-            string_list(ui, "Excluded glob patterns", &mut s.exclude_globs, "*.iso");
-        });
-        egui::CollapsingHeader::new("Safety").default_open(true).show(ui, |ui| {
-            let mut gb = s.confirm_bytes_threshold as f64 / 1e9;
-            if ui.add(egui::DragValue::new(&mut gb).range(0.0..=100_000.0).suffix(" GB")).on_hover_text("Typed confirmation above this size").changed() {
-                s.confirm_bytes_threshold = (gb * 1e9) as u64;
-            }
-            ui.add(egui::DragValue::new(&mut s.confirm_count_threshold).range(1..=10_000_000).suffix(" items"));
-            ui.label(RichText::new("Built-in protected paths (system folders, home root, volume roots) are always enforced.").weak());
-            path_list(ui, "Additional protected paths", &mut s.protected_paths);
-        });
-        egui::CollapsingHeader::new("DevSweep").show(ui, |ui| {
-            ui.add(egui::DragValue::new(&mut s.dev_stale_days).range(1..=10_000).prefix("Stale after ").suffix(" days"));
-            ui.checkbox(&mut s.dev_check_git, "Use git for last-commit date and tracked-artifact check");
-            ui.checkbox(&mut s.dev_express_mode, "Express mode: go straight to confirmation after cleaning")
-                .on_hover_text("Selected artifacts are still staged and summarised before anything is removed.");
-            path_list(ui, "Pinned projects", &mut s.dev_pinned);
-            ui.label(format!("{} custom rules (edit settings.toml → [[dev_custom_rules]])", s.dev_custom_rules.len()));
-        });
-        egui::CollapsingHeader::new("DuplicateLens").show(ui, |ui| {
-            let mut mb = s.dup_min_size as f64 / 1_048_576.0;
-            if ui.add(egui::DragValue::new(&mut mb).range(0.000001..=100_000.0).prefix("Default min size ").suffix(" MiB")).changed() {
-                s.dup_min_size = ((mb * 1_048_576.0) as u64).max(1);
-            }
-            ui.checkbox(&mut s.dup_paranoid, "Paranoid byte-by-byte verification by default");
-            let mut t = s.dup_io_threads.unwrap_or(0);
-            if ui.add(egui::Slider::new(&mut t, 0..=32).text("hashing threads (0 = auto by device type)")).changed() {
-                s.dup_io_threads = (t > 0).then_some(t);
-            }
-            ui.add(egui::Slider::new(&mut s.dup_similarity_threshold, 0..=20).text("default similarity distance"));
-            ui.horizontal(|ui| {
-                ui.label("Hash cache:");
-                ui.label(RichText::new(s.hash_cache.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "disabled".into())).monospace());
-            });
-            if let Some(p) = s.hash_cache.clone() {
-                if ui.button("Clear hash cache").clicked() {
-                    let _ = std::fs::remove_file(p);
-                }
-            }
-        });
-        if let Some(p) = sr_cli::settings::Settings::default_path() {
-            ui.separator();
-            ui.label(RichText::new(format!("Stored in {}", p.display())).weak().small());
-        }
-    });
+        },
+    );
     if format!("{:?}", app.settings) != before {
-        changed = true;
-    }
-    if changed {
         app.settings_dirty = true;
     }
     if !open {
@@ -640,37 +896,298 @@ fn settings(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-fn path_list(ui: &mut egui::Ui, label: &str, list: &mut Vec<PathBuf>) {
-    ui.label(label);
+fn settings_section(app: &mut App, ui: &mut egui::Ui) {
+    let s = &mut app.settings;
+    match app.dialogs.settings_section {
+        0 => {
+            theme::setting_row(ui, "Theme", "", |ui| {
+                theme::segmented(
+                    ui,
+                    &mut s.theme,
+                    &[
+                        (Theme::System, "System"),
+                        (Theme::Light, "Light"),
+                        (Theme::Dark, "Dark"),
+                    ],
+                );
+            });
+            theme::setting_row(
+                ui,
+                "Sizes",
+                "On disk counts the space files really use",
+                |ui| {
+                    theme::segmented(
+                        ui,
+                        &mut s.size_mode,
+                        &[
+                            (SizeMode::Allocated, "On disk"),
+                            (SizeMode::Apparent, "Apparent"),
+                        ],
+                    );
+                },
+            );
+            theme::setting_row(ui, "Units", "", |ui| {
+                theme::segmented(
+                    ui,
+                    &mut s.size_units,
+                    &[(SizeUnits::Decimal, "GB"), (SizeUnits::Binary, "GiB")],
+                );
+            });
+            theme::setting_row(
+                ui,
+                "Rings",
+                "How many folder levels the chart shows",
+                |ui| {
+                    ui.add(egui::Slider::new(&mut s.rings, 2..=10));
+                },
+            );
+            theme::setting_row(
+                ui,
+                "Smallest arc",
+                "Items narrower than this are grouped together",
+                |ui| {
+                    ui.add(egui::Slider::new(&mut s.min_arc_degrees, 0.1..=5.0).suffix("°"));
+                },
+            );
+            theme::setting_row(
+                ui,
+                "High-contrast chart",
+                "Stronger colours for the sunburst",
+                |ui| {
+                    theme::toggle(ui, &mut s.high_contrast);
+                },
+            );
+            theme::setting_row(ui, "Reduce motion", "Turn off zoom animations", |ui| {
+                theme::toggle(ui, &mut s.reduce_motion);
+            });
+            theme::setting_row(ui, "Zoom animation", "", |ui| {
+                ui.add_enabled(
+                    !s.reduce_motion,
+                    egui::Slider::new(&mut s.animation_ms, 0..=1000).suffix(" ms"),
+                );
+            });
+        }
+        1 => {
+            theme::setting_row(
+                ui,
+                "Follow symbolic links",
+                "Loops are detected and skipped",
+                |ui| {
+                    theme::toggle(ui, &mut s.follow_symlinks);
+                },
+            );
+            theme::setting_row(
+                ui,
+                "Include other disks",
+                "Enter mounted disks found inside a scan",
+                |ui| {
+                    theme::toggle(ui, &mut s.cross_filesystems);
+                },
+            );
+            theme::setting_row(ui, "Scan threads", "0 uses every core", |ui| {
+                let mut threads = s.scan_threads.unwrap_or(0);
+                if ui.add(egui::Slider::new(&mut threads, 0..=64)).changed() {
+                    s.scan_threads = (threads > 0).then_some(threads);
+                }
+            });
+            list_heading(
+                ui,
+                "Skipped folders",
+                "Never scanned, including everything inside",
+            );
+            path_list(ui, &mut s.exclude_paths);
+            list_heading(
+                ui,
+                "Skipped patterns",
+                "Names or paths matching these are skipped, e.g. *.iso",
+            );
+            string_list(ui, "exclude_globs", &mut s.exclude_globs, "*.iso");
+        }
+        2 => {
+            theme::setting_row(
+                ui,
+                "Ask to type DELETE above",
+                "For permanent deletion of this much data",
+                |ui| {
+                    let mut gb = s.confirm_bytes_threshold as f64 / 1e9;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut gb)
+                                .range(0.0..=100_000.0)
+                                .suffix(" GB"),
+                        )
+                        .changed()
+                    {
+                        s.confirm_bytes_threshold = (gb * 1e9) as u64;
+                    }
+                },
+            );
+            theme::setting_row(ui, "…or this many items", "", |ui| {
+                ui.add(egui::DragValue::new(&mut s.confirm_count_threshold).range(1..=10_000_000));
+            });
+            list_heading(
+                ui,
+                "Protected folders",
+                "Can never be staged. System folders, your home folder and disk roots are always protected.",
+            );
+            path_list(ui, &mut s.protected_paths);
+        }
+        3 => {
+            theme::setting_row(
+                ui,
+                "Stale after",
+                "Projects untouched this long count as stale",
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut s.dev_stale_days)
+                            .range(1..=10_000)
+                            .suffix(" days"),
+                    );
+                },
+            );
+            theme::setting_row(
+                ui,
+                "Use git",
+                "Read last-commit dates and spot tracked build folders",
+                |ui| {
+                    theme::toggle(ui, &mut s.dev_check_git);
+                },
+            );
+            theme::setting_row(
+                ui,
+                "Express mode",
+                "Open the confirmation right after staging. You still review before anything is removed.",
+                |ui| {
+                    theme::toggle(ui, &mut s.dev_express_mode);
+                },
+            );
+            list_heading(ui, "Pinned projects", "Never suggested for cleaning");
+            path_list(ui, &mut s.dev_pinned);
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!(
+                    "{} custom rules. Add more under [[dev_custom_rules]] in settings.toml.",
+                    s.dev_custom_rules.len()
+                ))
+                .size(12.0)
+                .color(theme::of(ui).slate),
+            );
+        }
+        _ => {
+            theme::setting_row(
+                ui,
+                "Smallest file",
+                "Files below this size are ignored",
+                |ui| {
+                    let mut mb = s.dup_min_size as f64 / 1_048_576.0;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut mb)
+                                .range(0.000001..=100_000.0)
+                                .suffix(" MiB"),
+                        )
+                        .changed()
+                    {
+                        s.dup_min_size = ((mb * 1_048_576.0) as u64).max(1);
+                    }
+                },
+            );
+            theme::setting_row(
+                ui,
+                "Byte-by-byte check",
+                "Compare every byte of matches. Slower, fully certain.",
+                |ui| {
+                    theme::toggle(ui, &mut s.dup_paranoid);
+                },
+            );
+            theme::setting_row(
+                ui,
+                "Hashing threads",
+                "0 picks a number that suits the disk",
+                |ui| {
+                    let mut t = s.dup_io_threads.unwrap_or(0);
+                    if ui.add(egui::Slider::new(&mut t, 0..=32)).changed() {
+                        s.dup_io_threads = (t > 0).then_some(t);
+                    }
+                },
+            );
+            theme::setting_row(
+                ui,
+                "Image similarity",
+                "Lower is stricter; 0 means visually identical",
+                |ui| {
+                    ui.add(egui::Slider::new(&mut s.dup_similarity_threshold, 0..=20));
+                },
+            );
+            let cache = s.hash_cache.clone();
+            theme::setting_row(
+                ui,
+                "Hash cache",
+                "Remembers file hashes so rescans are faster",
+                |ui| {
+                    if let Some(p) = cache {
+                        if ui.button("Clear").clicked() {
+                            let _ = std::fs::remove_file(p);
+                        }
+                    }
+                },
+            );
+        }
+    }
+}
+
+fn list_heading(ui: &mut egui::Ui, title: &str, help: &str) {
+    let p = theme::of(ui);
+    ui.add_space(16.0);
+    ui.label(RichText::new(title).semibold().color(p.ink));
+    ui.label(RichText::new(help).size(12.0).color(p.slate));
+    ui.add_space(6.0);
+}
+
+fn path_list(ui: &mut egui::Ui, list: &mut Vec<PathBuf>) {
+    let p = theme::of(ui);
     let mut remove = None;
-    for (i, p) in list.iter().enumerate() {
+    for (i, path) in list.iter().enumerate() {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(p.display().to_string()).monospace());
-            if ui.small_button("×").clicked() {
-                remove = Some(i);
-            }
+            theme::path_label(ui, path);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(theme::ghost(ui, RichText::new("Remove").color(p.slate)))
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            });
         });
     }
     if let Some(i) = remove {
         list.remove(i);
     }
-    if ui.small_button("Add folder…").clicked() {
+    if list.is_empty() {
+        ui.label(RichText::new("None").color(p.slate));
+    }
+    if ui.button("Add folder…").clicked() {
         if let Some(p) = rfd::FileDialog::new().pick_folder() {
             list.push(p);
         }
     }
 }
 
-fn string_list(ui: &mut egui::Ui, label: &str, list: &mut Vec<String>, hint: &str) {
-    ui.label(label);
-    let id = ui.id().with(label);
+fn string_list(ui: &mut egui::Ui, key: &str, list: &mut Vec<String>, hint: &str) {
+    let p = theme::of(ui);
+    let id = ui.id().with(key);
     let mut remove = None;
-    for (i, p) in list.iter().enumerate() {
+    for (i, s) in list.iter().enumerate() {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(p).monospace());
-            if ui.small_button("×").clicked() {
-                remove = Some(i);
-            }
+            ui.label(RichText::new(s).monospace().color(p.ink));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(theme::ghost(ui, RichText::new("Remove").color(p.slate)))
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            });
         });
     }
     if let Some(i) = remove {
@@ -678,12 +1195,13 @@ fn string_list(ui: &mut egui::Ui, label: &str, list: &mut Vec<String>, hint: &st
     }
     let mut draft: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.add(
+        let edit = ui.add(
             egui::TextEdit::singleline(&mut draft)
                 .hint_text(hint)
-                .desired_width(160.0),
+                .desired_width(200.0),
         );
-        if ui.small_button("Add").clicked() && !draft.trim().is_empty() {
+        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.button("Add").clicked() || enter) && !draft.trim().is_empty() {
             list.push(draft.trim().to_string());
             draft.clear();
         }
