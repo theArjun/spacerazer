@@ -123,6 +123,19 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// `1234567` → `1,234,567`.
+pub fn group_digits(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 pub fn format_age_days(days: u64) -> String {
     match days {
         0 => "today".into(),
@@ -200,5 +213,8 @@ mod tests {
         assert_eq!(format_date(86_400), "1970-01-02");
         assert_eq!(format_date(1_790_640_000), "2026-09-29");
         assert_eq!(format_date(951_782_400), "2000-02-29");
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(1_234_567), "1,234,567");
+        assert_eq!(group_digits(999), "999");
     }
 }

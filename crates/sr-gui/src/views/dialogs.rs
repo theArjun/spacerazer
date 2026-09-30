@@ -3,12 +3,13 @@
 
 use std::path::PathBuf;
 
-use egui::{Color32, RichText};
+use egui::RichText;
 use sr_cli::settings::Theme;
 use sr_core::{Module, SizeMode, SizeUnits};
 use sr_ops::{JournalRecord, Method, Outcome};
 
 use crate::app::{Action, App, method_label};
+use crate::theme::{self, Typo};
 use crate::util::{Job, Level, format_date};
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
@@ -42,12 +43,12 @@ fn confirm(app: &mut App, ctx: &egui::Context) {
         ui.set_max_width(460.0);
         match method {
             Method::Permanent => {
-                ui.heading(RichText::new("Delete permanently?").color(ui.visuals().error_fg_color));
-                ui.label(format!("{n} items · {} will be deleted. This cannot be undone.", app.fmt(bytes)));
+                ui.label(RichText::new("Delete permanently?").display_bold(22.0).color(theme::of(ui).danger));
+                ui.label(format!("{n} items, {} will be deleted. This cannot be undone.", app.fmt(bytes)));
             }
             _ => {
-                ui.heading("Move to Trash?");
-                ui.label(format!("{n} items · {} will be moved to the trash.", app.fmt(bytes)));
+                ui.label(RichText::new("Move to Trash?").display_bold(22.0));
+                ui.label(format!("{n} items, {} will be moved to the trash.", app.fmt(bytes)));
                 ui.label(RichText::new("You can restore them from the system trash (or SpaceRazer's quarantine).").weak());
             }
         }
@@ -82,11 +83,11 @@ fn confirm(app: &mut App, ctx: &egui::Context) {
                 close = true;
             }
             let ok = !need_typed || app.dialogs.confirm_text.trim() == "DELETE";
-            let label = match method {
-                Method::Permanent => RichText::new("Delete permanently").color(ui.visuals().error_fg_color),
-                _ => RichText::new("Move to Trash").strong(),
+            let button = match method {
+                Method::Permanent => theme::danger(ui, "Delete permanently"),
+                _ => theme::primary(ui, "Move to Trash"),
             };
-            if ui.add_enabled(ok, egui::Button::new(label)).clicked() {
+            if ui.add_enabled(ok, button).clicked() {
                 go = true;
             }
         });
@@ -115,16 +116,16 @@ fn report(app: &mut App, ctx: &egui::Context) {
         .default_width(640.0)
         .show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(method_label(r.method)).strong());
+                ui.label(RichText::new(method_label(r.method)).semibold());
                 if r.method == Method::DryRun {
                     ui.label(format!(
-                        "{} operations · {} would be freed · nothing was changed",
+                        "{} operations, {} would be freed, nothing was changed",
                         r.succeeded,
                         app.fmt(r.bytes_freed)
                     ));
                 } else {
                     ui.label(format!(
-                        "{} succeeded · {} skipped · {} failed · {} freed",
+                        "{} succeeded, {} skipped, {} failed, {} freed",
                         r.succeeded,
                         r.skipped,
                         r.failed,
@@ -157,16 +158,15 @@ fn report(app: &mut App, ctx: &egui::Context) {
                                             ),
                                             None => format!("✔ {}", app.fmt(*bytes_freed)),
                                         },
-                                        Color32::from_rgb(0, 158, 115),
+                                        theme::of(ui).ok,
                                     ),
                                     Outcome::WouldDo { operation, bytes } => (
                                         format!("{operation} ({})", app.fmt(*bytes)),
                                         ui.visuals().text_color(),
                                     ),
-                                    Outcome::Skipped { reason } => (
-                                        format!("skipped: {reason}"),
-                                        Color32::from_rgb(230, 159, 0),
-                                    ),
+                                    Outcome::Skipped { reason } => {
+                                        (format!("skipped: {reason}"), theme::of(ui).warn)
+                                    }
                                     Outcome::Failed { error } => {
                                         (format!("failed: {error}"), ui.visuals().error_fg_color)
                                     }
@@ -242,7 +242,7 @@ fn journal(app: &mut App, ctx: &egui::Context) {
                                 .num_columns(6)
                                 .show(ui, |ui| {
                                     for h in ["When", "Operation", "Path", "Size", "Result", ""] {
-                                        ui.strong(h);
+                                        theme::column_header(ui, h);
                                     }
                                     ui.end_row();
                                     for r in v.iter().rev().take(2000) {
@@ -322,7 +322,7 @@ fn quarantine(app: &mut App, ctx: &egui::Context) {
                     app.actions.push(Action::Reveal(d.clone()));
                 }
                 if ui
-                    .button(RichText::new("Empty").color(ui.visuals().error_fg_color))
+                    .add(theme::danger(ui, "Empty"))
                     .on_hover_text("Permanently deletes everything in this quarantine folder")
                     .clicked()
                 {
@@ -495,7 +495,7 @@ fn log(app: &mut App, ctx: &egui::Context) {
                     for l in &app.log.lines {
                         let color = match l.level {
                             Level::Info => ui.visuals().text_color(),
-                            Level::Warn => Color32::from_rgb(230, 160, 20),
+                            Level::Warn => theme::of(ui).warn,
                             Level::Error => ui.visuals().error_fg_color,
                         };
                         ui.label(
@@ -533,7 +533,7 @@ fn help(app: &mut App, ctx: &egui::Context) {
                     ("Esc", "Close dialog / cancel running job"),
                     ("?", "This overlay"),
                 ] {
-                    ui.label(RichText::new(k).monospace().strong());
+                    ui.label(RichText::new(k).monospace().semibold());
                     ui.label(v);
                     ui.end_row();
                 }

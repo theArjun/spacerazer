@@ -7,7 +7,7 @@
 
 use std::f32::consts::TAU;
 
-use egui::{Color32, Mesh, Pos2, Vec2, epaint::Hsva};
+use egui::{Color32, Mesh, Pos2, Vec2};
 use sr_core::{NodeFlags, NodeId, NodeKind, SizeMode, Tree};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -174,7 +174,7 @@ pub struct Geometry {
 
 impl Geometry {
     pub fn new(center: Pos2, radius: f32, rings: u32) -> Self {
-        let hole = radius * 0.22;
+        let hole = radius * 0.24;
         let ring_width = (radius - hole) / rings.max(1) as f32;
         Self {
             center,
@@ -282,41 +282,26 @@ const HIGH_CONTRAST: [Color32; 8] = [
 
 impl Colorizer<'_> {
     pub fn color(&self, arc: &ArcSeg) -> Color32 {
+        let pal = crate::theme::palette(self.dark);
+        let bg = pal.paper;
         if arc.node.is_none() {
-            return if self.dark {
-                Color32::from_gray(90)
-            } else {
-                Color32::from_gray(185)
-            };
+            // "Smaller items" read as neutral ground, not as a branch.
+            return crate::theme::mix(pal.line, pal.slate, 0.25);
         }
-        let depth = arc.ring as f32;
+        // Deeper rings blend toward the background: depth reads as distance,
+        // while the hue keeps the branch identity.
+        let fade = |c: Color32| crate::theme::mix(c, bg, (arc.ring as f32 - 1.0) * 0.11);
         let c = match self.palette {
             Palette::Branch => {
-                let hue = (arc.branch as f32 * 0.618_034).fract();
-                let v = if self.dark {
-                    0.92 - depth * 0.07
-                } else {
-                    0.95 - depth * 0.035
-                };
-                let s = if self.dark { 0.55 } else { 0.62 - depth * 0.06 };
-                Hsva::new(hue, s.clamp(0.2, 1.0), v.clamp(0.35, 1.0), 1.0).into()
+                fade(crate::theme::MAP_TINTS[arc.branch as usize % crate::theme::MAP_TINTS.len()])
             }
             Palette::HighContrast => {
                 let base = HIGH_CONTRAST[arc.branch as usize % HIGH_CONTRAST.len()];
-                if arc.ring > 1 {
-                    base.gamma_multiply(1.0 - (depth - 1.0) * 0.1)
-                } else {
-                    base
-                }
+                crate::theme::mix(base, bg, (arc.ring as f32 - 1.0) * 0.08)
             }
             Palette::FileType => {
                 if arc.kind == NodeKind::Dir {
-                    let g = if self.dark {
-                        70 + (depth * 12.0) as u8
-                    } else {
-                        200 - (depth * 12.0) as u8
-                    };
-                    Color32::from_gray(g)
+                    fade(crate::theme::mix(pal.line, pal.slate, 0.35))
                 } else {
                     let name = arc
                         .node
@@ -325,20 +310,19 @@ impl Colorizer<'_> {
                 }
             }
             Palette::Age => {
+                // Moss (recent) through ochre to coral (two years or more).
                 let days = ((self.now - arc.mtime).max(0) / 86_400) as f32;
-                // Green (recent) → red (over two years).
                 let t = (days / 730.0).clamp(0.0, 1.0);
-                Hsva::new(
-                    0.33 * (1.0 - t),
-                    0.6,
-                    if self.dark { 0.8 } else { 0.85 },
-                    1.0,
-                )
-                .into()
+                let [moss, ochre, coral] = [3, 1, 5].map(|i| crate::theme::MAP_TINTS[i]);
+                if t < 0.5 {
+                    crate::theme::mix(moss, ochre, t * 2.0)
+                } else {
+                    crate::theme::mix(ochre, coral, (t - 0.5) * 2.0)
+                }
             }
         };
         if arc.staged {
-            c.gamma_multiply(0.35)
+            crate::theme::mix(c, bg, 0.6)
         } else {
             c
         }
@@ -354,26 +338,22 @@ pub fn category_color(name: &str) -> Color32 {
 pub fn category(ext: &str) -> (&'static str, Color32) {
     match ext {
         "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" | "tif" | "tiff" | "bmp" | "raw"
-        | "cr2" | "nef" | "arw" | "dng" | "svg" | "psd" => {
-            ("Images", Color32::from_rgb(230, 159, 0))
-        }
+        | "cr2" | "nef" | "arw" | "dng" | "svg" | "psd" => ("Images", crate::theme::MAP_TINTS[1]),
         "mp4" | "mov" | "mkv" | "avi" | "webm" | "m4v" | "wmv" => {
-            ("Video", Color32::from_rgb(213, 94, 0))
+            ("Video", crate::theme::MAP_TINTS[5])
         }
         "mp3" | "flac" | "wav" | "aac" | "m4a" | "ogg" | "aiff" => {
-            ("Audio", Color32::from_rgb(204, 121, 167))
+            ("Audio", crate::theme::MAP_TINTS[8])
         }
         "zip" | "gz" | "tgz" | "xz" | "bz2" | "7z" | "rar" | "tar" | "zst" | "dmg" | "iso"
-        | "pkg" | "msi" => ("Archives", Color32::from_rgb(120, 94, 240)),
+        | "pkg" | "msi" => ("Archives", crate::theme::MAP_TINTS[4]),
         "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "md" | "pages"
-        | "key" | "numbers" | "odt" | "rtf" | "csv" => {
-            ("Documents", Color32::from_rgb(0, 158, 115))
-        }
+        | "key" | "numbers" | "odt" | "rtf" | "csv" => ("Documents", crate::theme::MAP_TINTS[3]),
         "rs" | "js" | "ts" | "tsx" | "jsx" | "py" | "go" | "java" | "kt" | "c" | "h" | "cpp"
         | "hpp" | "swift" | "rb" | "php" | "cs" | "json" | "toml" | "yaml" | "yml" | "html"
-        | "css" => ("Code", Color32::from_rgb(86, 180, 233)),
+        | "css" => ("Code", crate::theme::MAP_TINTS[2]),
         "o" | "a" | "so" | "dylib" | "dll" | "exe" | "rlib" | "rmeta" | "class" | "jar" | "pyc"
-        | "wasm" => ("Binaries", Color32::from_rgb(0, 114, 178)),
+        | "wasm" => ("Binaries", crate::theme::MAP_TINTS[9]),
         _ => ("Other", Color32::from_rgb(150, 150, 150)),
     }
 }

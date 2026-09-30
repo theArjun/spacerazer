@@ -3,13 +3,14 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use egui::{Color32, RichText};
+use egui::RichText;
 use sr_cli::settings::Settings;
 use sr_core::Module;
 use sr_dedup::{AutoSelect, DupGroup, DupOptions, DupResult, GroupKind, Pass, Progress};
 use sr_ops::LinkKind;
 
 use crate::app::{Action, App};
+use crate::theme::{self, Typo};
 use crate::util::{Job, format_date, format_duration};
 
 pub enum DupMsg {
@@ -251,7 +252,7 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
         ui.heading("DuplicateLens");
         ui.label(
             RichText::new(
-                "Size → partial hash → full BLAKE3 hash, plus optional visual similarity.",
+                "Compares size, then a partial hash, then a full BLAKE3 hash. Optionally finds look-alike images.",
             )
             .weak(),
         );
@@ -282,13 +283,13 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
     };
     let stats = &result.stats;
     ui.label(format!(
-        "{} files scanned · {} groups · {} reclaimable · {} hashed · {}{}",
+        "{} files scanned, {} groups, {} reclaimable, {} hashed, {}{}",
         stats.files_scanned,
         result.groups.len(),
         app.fmt(result.total_wasted()),
         app.fmt(stats.bytes_hashed),
         format_duration(stats.elapsed),
-        if stats.cancelled { " · cancelled" } else { "" }
+        if stats.cancelled { ", cancelled" } else { "" }
     ));
 
     egui::Panel::left("dup_groups")
@@ -341,7 +342,7 @@ fn options_bar(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
                     j.cancel.cancel();
                 }
             } else if ui
-                .add_enabled(!d.roots.is_empty(), egui::Button::new(RichText::new("Find duplicates").strong()))
+                .add_enabled(!d.roots.is_empty(), theme::primary(ui, "Find duplicates"))
                 .clicked()
             {
                 go = true;
@@ -364,7 +365,7 @@ fn progress_line(app: &App, ui: &mut egui::Ui, p: Progress) {
     };
     ui.horizontal(|ui| {
         ui.spinner();
-        ui.label(RichText::new(pass).strong());
+        ui.label(RichText::new(pass).semibold());
         let frac = if p.bytes_total > 0 {
             p.bytes_hashed as f32 / p.bytes_total as f32
         } else if p.files_total > 0 {
@@ -374,7 +375,7 @@ fn progress_line(app: &App, ui: &mut egui::Ui, p: Progress) {
         };
         ui.add(egui::ProgressBar::new(frac.clamp(0.0, 1.0)).desired_width(220.0));
         ui.label(format!(
-            "{}/{} files · {} / {} · {}/s{}",
+            "{}/{} files, {} / {}, {}/s{}",
             p.files_done,
             p.files_total,
             app.fmt(p.bytes_hashed),
@@ -382,7 +383,7 @@ fn progress_line(app: &App, ui: &mut egui::Ui, p: Progress) {
             app.fmt(p.throughput as u64),
             p.eta_secs
                 .map(|e| format!(
-                    " · ETA {}",
+                    ", ETA {}",
                     format_duration(std::time::Duration::from_secs_f64(e))
                 ))
                 .unwrap_or_default()
@@ -452,14 +453,14 @@ fn groups_list_inner(app: &mut App, ui: &mut egui::Ui, r: &DupResult) {
         .sum();
     ui.horizontal(|ui| {
         ui.label(format!(
-            "{} marked · {}",
+            "{} marked, {}",
             app.dup.marks.len(),
             app.fmt(marked_bytes)
         ));
         if ui
             .add_enabled(
                 !app.dup.marks.is_empty(),
-                egui::Button::new("Stage marked → Trash Drawer"),
+                theme::primary(ui, "Send marked to Trash Drawer"),
             )
             .clicked()
         {
@@ -483,7 +484,7 @@ fn groups_list_inner(app: &mut App, ui: &mut egui::Ui, r: &DupResult) {
                 if groups.is_empty() {
                     continue;
                 }
-                ui.label(RichText::new(format!("{title} — {} groups", groups.len())).strong());
+                ui.label(RichText::new(format!("{title} — {} groups", groups.len())).semibold());
                 for (i, g) in groups.iter().enumerate().take(5000) {
                     let sel = app.dup.selected == Some((similar, i));
                     let name = g
@@ -497,13 +498,13 @@ fn groups_list_inner(app: &mut App, ui: &mut egui::Ui, r: &DupResult) {
                         .filter(|f| app.dup.marks.contains(&f.path))
                         .count();
                     let label = format!(
-                        "{}{} × {} · {} wasted{}",
+                        "{}{} × {}, {} wasted{}",
                         if similar { "≈ " } else { "" },
                         g.files.len(),
                         name,
                         app.fmt(g.wasted()),
                         if marked > 0 {
-                            format!(" · {marked} marked")
+                            format!(", {marked} marked")
                         } else {
                             String::new()
                         }
@@ -535,8 +536,8 @@ fn group_detail(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
             GroupKind::Identical => {
                 ui.label(
                     RichText::new("IDENTICAL")
-                        .strong()
-                        .color(Color32::from_rgb(0, 158, 115)),
+                        .semibold()
+                        .color(theme::of(ui).ok),
                 );
                 if let Some(h) = &g.hash {
                     ui.label(
@@ -549,8 +550,8 @@ fn group_detail(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
             GroupKind::Similar { max_distance } => {
                 ui.label(
                     RichText::new("SIMILAR")
-                        .strong()
-                        .color(Color32::from_rgb(230, 159, 0)),
+                        .semibold()
+                        .color(theme::of(ui).warn),
                 )
                 .on_hover_text(
                     "Visually similar, not byte-identical. Review carefully; never auto-selected.",
@@ -559,7 +560,7 @@ fn group_detail(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
         }
         ui.label(format!(
-            "{} files · {} each · {} wasted",
+            "{} files, {} each, {} wasted",
             g.files.len(),
             app.fmt(g.size),
             app.fmt(g.wasted())
@@ -634,7 +635,7 @@ fn group_detail(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 }
                             }
                             preview(app, ui, &f.path);
-                            ui.label(RichText::new(crate::app::path_name(&f.path)).strong());
+                            ui.label(RichText::new(crate::app::path_name(&f.path)).semibold());
                             ui.label(RichText::new(f.path.display().to_string()).small().weak())
                                 .context_menu(|ui| {
                                     if ui.button("Reveal in file manager").clicked() {
@@ -804,7 +805,7 @@ fn link_dialogs(app: &mut App, ctx: &egui::Context) {
         if kind == LinkKind::Hardlink {
             ui.label(
                 RichText::new("⚠ After this, all paths refer to the same file. Editing any one of them changes all of them.")
-                    .color(Color32::from_rgb(230, 159, 0)),
+                    .color(theme::of(ui).warn),
             );
         }
         ui.label("Each file is replaced atomically: the link is created under a temporary name, its content is verified, then it is renamed over the copy. On any failure the copy is left untouched.");
@@ -814,7 +815,7 @@ fn link_dialogs(app: &mut App, ctx: &egui::Context) {
             if cancel.clicked() {
                 close = true;
             }
-            if ui.button(RichText::new("Replace").color(ui.visuals().error_fg_color)).clicked() && keep.is_some() {
+            if ui.add(theme::danger(ui, "Replace")).clicked() && keep.is_some() {
                 let keep = keep.clone().unwrap_or_default();
                 let protected = app.protected.clone();
                 let journal = app.journal.as_ref().map(|j| j.path().to_path_buf());

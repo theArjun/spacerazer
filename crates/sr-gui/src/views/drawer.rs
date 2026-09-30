@@ -6,6 +6,7 @@ use sr_core::Module;
 use sr_ops::Method;
 
 use crate::app::{Action, App, is_cow_fs};
+use crate::theme::{self, Typo};
 use crate::views::map::DragPath;
 
 pub fn panel(app: &mut App, ui: &mut egui::Ui) {
@@ -37,15 +38,32 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
         .is_some_and(|v| is_cow_fs(&v.file_system));
 
     ui.horizontal(|ui| {
+        let pal = theme::of(ui);
         let arrow = if app.drawer_open { "⏷" } else { "⏶" };
-        if ui.button(arrow).on_hover_text("Show / hide staged items").clicked() {
+        if ui.add(theme::ghost(ui, arrow)).on_hover_text("Show or hide staged items").clicked() {
             app.drawer_open = !app.drawer_open;
         }
-        ui.label(RichText::new("Trash Drawer:").strong());
-        ui.label(format!(
-            "{count} items · {}{} reclaimable",
-            if up_to { "up to " } else { "" },
+        ui.label(RichText::new("Trash Drawer").semibold().color(pal.ink));
+        ui.add_space(6.0);
+        let figure = if count == 0 {
+            String::new()
+        } else if up_to {
+            format!("up to {}", app.fmt(reclaim))
+        } else {
             app.fmt(reclaim)
+        };
+        ui.label(RichText::new(figure).display_bold(20.0).color(pal.ink))
+        .on_hover_text(
+            "Nested items are counted once; hard-linked files whose other links survive free nothing. \
+             On copy-on-write filesystems (APFS, Btrfs) cloned blocks may be shared, so the figure is an upper bound.",
+        );
+        ui.label(theme::muted(
+            ui,
+            match count {
+                0 => "nothing staged".to_string(),
+                1 => "reclaimable from 1 item".to_string(),
+                n => format!("reclaimable from {n} items"),
+            },
         ))
         .on_hover_text(
             "Nested items are counted once; hard-linked files whose other links survive free nothing. \
@@ -72,9 +90,8 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                 return;
             }
             let enabled = count > 0 && app.staging.is_empty();
-            let danger = ui.visuals().error_fg_color;
             if ui
-                .add_enabled(enabled, egui::Button::new(RichText::new("Delete permanently…").color(danger)))
+                .add_enabled(enabled, theme::danger(ui, "Delete permanently…"))
                 .on_hover_text("Irreversible. Requires confirmation.")
                 .clicked()
             {
@@ -82,7 +99,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                 app.dialogs.confirm_text.clear();
             }
             if ui
-                .add_enabled(enabled, egui::Button::new(RichText::new("Move to Trash").strong()))
+                .add_enabled(enabled, theme::primary(ui, "Move to Trash"))
                 .on_hover_text("Recoverable: items go to the OS trash (or a quarantine folder where no trash exists).")
                 .clicked()
             {
@@ -126,7 +143,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
         .header(20.0, |mut h| {
             for t in ["Path", "Size", "Source", "Reason", ""] {
                 h.col(|ui| {
-                    ui.strong(t);
+                    theme::column_header(ui, t);
                 });
             }
         })

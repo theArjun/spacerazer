@@ -3,13 +3,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use egui::{Color32, Key, KeyboardShortcut, Modifiers, RichText};
+use egui::{Key, KeyboardShortcut, Modifiers, RichText};
 use sr_cli::settings::{Settings, Theme};
 use sr_core::{Module, NodeFlags, NodeId, Tree, format_size};
 use sr_ops::{Drawer, ExecEvent, Journal, Method, Report, StagedItem};
 use sr_platform::{ProtectedPaths, VolumeInfo};
 use sr_scan::ScanHandle;
 
+use crate::theme::{self, Typo};
 use crate::util::{Job, Level, Log};
 use crate::views;
 
@@ -168,6 +169,7 @@ impl App {
                 (PathBuf::from(p), delay, false)
             }),
         };
+        crate::theme::install(&cc.egui_ctx);
         app.apply_theme(&cc.egui_ctx);
         // Dev aid: `SPACERAZER_TAB=dev|dup` opens that module and runs it on
         // the given folders instead of scanning them.
@@ -194,7 +196,7 @@ impl App {
             Theme::Light => egui::ThemePreference::Light,
             Theme::Dark => egui::ThemePreference::Dark,
         });
-        ctx.global_style_mut(|s| {
+        ctx.all_styles_mut(|s| {
             s.animation_time = if self.settings.reduce_motion {
                 0.0
             } else {
@@ -645,30 +647,46 @@ impl App {
     // ------------------------------------------------------------------- ui
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
+        let p = theme::of(ui);
         ui.horizontal(|ui| {
-            ui.add_space(4.0);
-            for (tab, label, key) in [
-                (Tab::SpaceMap, "Space Map", "1"),
-                (Tab::DevSweep, "DevSweep", "2"),
-                (Tab::DuplicateLens, "DuplicateLens", "3"),
-            ] {
-                let r = ui.selectable_label(self.tab == tab, RichText::new(label).size(15.0));
-                if r.on_hover_text(format!("Ctrl/Cmd+{key}")).clicked() {
-                    self.tab = tab;
-                }
-            }
+            ui.add_space(6.0);
+            ui.label(RichText::new("SpaceRazer").display_bold(19.0).color(p.ink));
+            ui.add_space(18.0);
+            // Segmented module switcher.
+            egui::Frame::new()
+                .fill(p.mist)
+                .corner_radius(8)
+                .inner_margin(egui::Margin::same(3))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (tab, label, key) in [
+                        (Tab::SpaceMap, "Space Map", "1"),
+                        (Tab::DevSweep, "DevSweep", "2"),
+                        (Tab::DuplicateLens, "DuplicateLens", "3"),
+                    ] {
+                        let r = theme::tab(ui, self.tab == tab, label);
+                        if r.on_hover_text(format!("Ctrl/Cmd+{key}")).clicked() {
+                            self.tab = tab;
+                        }
+                    }
+                });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("⚙").on_hover_text("Settings").clicked() {
+                if ui
+                    .add(theme::ghost(ui, "⚙"))
+                    .on_hover_text("Settings")
+                    .clicked()
+                {
                     self.dialogs.settings = !self.dialogs.settings;
                 }
                 if ui
-                    .button("?")
+                    .add(theme::ghost(ui, "?"))
                     .on_hover_text("Keyboard shortcuts (?)")
                     .clicked()
                 {
                     self.dialogs.help = !self.dialogs.help;
                 }
                 ui.menu_button("☰", |ui| {
+                    ui.set_min_width(180.0);
                     if ui.button("Operation journal").clicked() {
                         self.dialogs.journal = true;
                         ui.close();
@@ -685,6 +703,7 @@ impl App {
                         self.dialogs.log = true;
                         ui.close();
                     }
+                    ui.separator();
                     if ui.button("Copy diagnostics").clicked() {
                         ui.ctx().copy_text(views::dialogs::diagnostics(self));
                         self.log.info("Diagnostics copied to clipboard", self.now);
@@ -692,6 +711,7 @@ impl App {
                     }
                 });
                 if self.tab == Tab::SpaceMap && self.scan.is_some() {
+                    ui.add_space(6.0);
                     views::map::search_box(self, ui);
                 }
             });
@@ -706,20 +726,35 @@ impl App {
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
         egui::Area::new(egui::Id::new("toasts"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -60.0))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -64.0))
             .order(egui::Order::Foreground)
             .interactable(false)
             .show(ctx, |ui| {
+                let p = theme::of(ui);
                 for (msg, level, _) in self.log.toasts.iter().rev().take(4) {
-                    let color = match level {
-                        Level::Info => ui.visuals().text_color(),
-                        Level::Warn => Color32::from_rgb(230, 160, 20),
-                        Level::Error => ui.visuals().error_fg_color,
+                    let bar = match level {
+                        Level::Info => p.accent,
+                        Level::Warn => p.warn,
+                        Level::Error => p.danger,
                     };
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_max_width(420.0);
-                        ui.label(RichText::new(msg).color(color));
-                    });
+                    let r = egui::Frame::popup(ui.style())
+                        .inner_margin(egui::Margin {
+                            left: 14,
+                            right: 14,
+                            top: 10,
+                            bottom: 10,
+                        })
+                        .show(ui, |ui| {
+                            ui.set_max_width(400.0);
+                            ui.label(RichText::new(msg).color(p.ink));
+                        })
+                        .response;
+                    // Level shown by a coloured edge, not by recolouring the text.
+                    let edge =
+                        egui::Rect::from_min_size(r.rect.min, egui::vec2(3.0, r.rect.height()));
+                    ui.painter()
+                        .rect_filled(edge.shrink2(egui::vec2(0.0, 6.0)), 2.0, bar);
+                    ui.add_space(4.0);
                 }
             });
     }
@@ -778,26 +813,39 @@ impl eframe::App for App {
         self.global_shortcuts(&ctx);
         self.handle_dropped_files(&ctx);
 
+        let pal = theme::of(ui);
         egui::Panel::top("tabs")
             .frame(
-                egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(6, 6)),
+                egui::Frame::side_top_panel(ui.style())
+                    .fill(pal.paper)
+                    .inner_margin(egui::Margin::symmetric(10, 8)),
             )
             .show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("drawer")
             .resizable(self.drawer_open)
+            .frame(
+                egui::Frame::side_top_panel(ui.style())
+                    .fill(pal.surface)
+                    .inner_margin(egui::Margin::symmetric(14, 10)),
+            )
             .show(ui, |ui| views::drawer::panel(self, ui));
 
-        egui::CentralPanel::default().show(ui, |ui| match self.tab {
-            Tab::SpaceMap => {
-                if self.scan.is_some() {
-                    views::map::view(self, ui);
-                } else {
-                    views::home::view(self, ui);
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::central_panel(ui.style())
+                    .inner_margin(egui::Margin::symmetric(18, 12)),
+            )
+            .show(ui, |ui| match self.tab {
+                Tab::SpaceMap => {
+                    if self.scan.is_some() {
+                        views::map::view(self, ui);
+                    } else {
+                        views::home::view(self, ui);
+                    }
                 }
-            }
-            Tab::DevSweep => views::dev::view(self, ui),
-            Tab::DuplicateLens => views::dup::view(self, ui),
-        });
+                Tab::DevSweep => views::dev::view(self, ui),
+                Tab::DuplicateLens => views::dup::view(self, ui),
+            });
 
         views::dialogs::show(self, &ctx);
         self.toasts(&ctx);

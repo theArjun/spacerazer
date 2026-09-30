@@ -5,6 +5,7 @@
 
 mod app;
 mod sunburst;
+mod theme;
 mod util;
 mod views;
 

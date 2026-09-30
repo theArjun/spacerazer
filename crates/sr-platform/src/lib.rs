@@ -243,9 +243,12 @@ pub fn volumes() -> Vec<VolumeInfo> {
         })
         .collect();
     // macOS lists APFS system sub-volumes; hide the read-only internals.
+    // macOS lists APFS system sub-volumes; hide the read-only internals, and
+    // the Data volume when `/` is listed: a scan of `/` covers it.
+    let has_root = out.iter().any(|v| v.mount_point == Path::new("/"));
     out.retain(|v| {
         let m = v.mount_point.to_string_lossy();
-        !(m.starts_with("/System/Volumes/") && m != "/System/Volumes/Data")
+        !(m.starts_with("/System/Volumes/") && (m != "/System/Volumes/Data" || has_root))
     });
     out.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
     out.dedup_by(|a, b| a.mount_point == b.mount_point);

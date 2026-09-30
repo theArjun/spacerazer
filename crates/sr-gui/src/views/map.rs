@@ -14,7 +14,8 @@ use crate::app::{Action, App, ScanState};
 use crate::sunburst::{
     ArcSeg, Colorizer, Geometry, Layout, LayoutParams, Palette, Transform, ease_in_out, tessellate,
 };
-use crate::util::{Job, format_date};
+use crate::theme::{self, Typo};
+use crate::util::{Job, format_date, group_digits};
 
 /// Drag-and-drop payload: a path dragged from the chart or list onto the
 /// Trash Drawer (FR-MAP-12).
@@ -164,6 +165,11 @@ fn palette(app: &App) -> Palette {
 
 pub fn view(app: &mut App, ui: &mut egui::Ui) {
     let Some(scan) = &app.scan else { return };
+    // The chart appears once the scan completes; until then, show progress.
+    if !scan.handle.is_done() {
+        scanning_view(app, ui);
+        return;
+    }
     let tree_arc: Arc<RwLock<Tree>> = scan.tree().clone();
     let tree = tree_arc.read().unwrap_or_else(|e| e.into_inner());
     if tree
@@ -190,56 +196,147 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
     poll_search(app, ui.ctx(), &tree_arc);
 }
 
+/// Progress screen shown while a scan runs.
+fn scanning_view(app: &mut App, ui: &mut egui::Ui) {
+    let Some(scan) = &app.scan else { return };
+    let h = &scan.handle;
+    let p = h.progress.clone();
+    let pal = theme::of(ui);
+    let bytes = p.bytes.load(Ordering::Relaxed);
+    let roots = &h.options.roots;
+    // Scanning a whole disk: its used space is a good estimate of the total.
+    let total = scan
+        .volume
+        .as_ref()
+        .filter(|v| roots.len() == 1 && roots[0] == v.mount_point)
+        .map(|v| v.used())
+        .filter(|&u| u > 0);
+    let name = if roots.len() == 1 {
+        crate::app::path_name(&roots[0])
+    } else {
+        format!("{} folders", roots.len())
+    };
+    let (paused, elapsed) = (h.is_paused(), h.elapsed());
+    let mut toggle_pause = false;
+    let mut cancel = false;
+
+    ui.vertical_centered(|ui| {
+        ui.add_space((ui.available_height() * 0.28).max(24.0));
+        ui.label(
+            RichText::new(if paused {
+                format!("Paused scanning {name}")
+            } else {
+                format!("Scanning {name}")
+            })
+            .semibold()
+            .size(15.0)
+            .color(pal.slate),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(app.fmt(bytes))
+                .display_bold(48.0)
+                .color(pal.ink),
+        );
+        ui.add_space(14.0);
+        let width = ui.available_width().min(460.0);
+        match total {
+            Some(t) => {
+                let frac = (bytes as f32 / t as f32).min(0.99);
+                theme::meter(ui, frac, width, pal.accent);
+                ui.add_space(6.0);
+                ui.label(theme::muted(
+                    ui,
+                    format!(
+                        "about {:.0}% of {} used on this disk",
+                        frac * 100.0,
+                        app.fmt(t)
+                    ),
+                ));
+            }
+            None => {
+                let animate = !paused && !app.reduce_motion();
+                theme::indeterminate(ui, width, pal.accent, animate);
+                ui.add_space(6.0);
+            }
+        }
+        ui.label(theme::muted(
+            ui,
+            format!(
+                "{} files in {} folders, {}",
+                group_digits(p.files.load(Ordering::Relaxed)),
+                group_digits(p.dirs.load(Ordering::Relaxed)),
+                crate::util::format_duration(elapsed)
+            ),
+        ));
+        let errors = p.errors.load(Ordering::Relaxed);
+        if errors > 0 {
+            ui.label(
+                RichText::new(format!(
+                    "{} locations could not be read",
+                    group_digits(errors)
+                ))
+                .color(pal.warn),
+            );
+        }
+        ui.add_space(18.0);
+        // Centre the two buttons as a group.
+        let btn_w = 190.0;
+        ui.allocate_ui_with_layout(
+            egui::vec2(btn_w, 30.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                if ui.button(if paused { "Resume" } else { "Pause" }).clicked() {
+                    toggle_pause = true;
+                }
+                if ui.button("Cancel scan").on_hover_text("Esc").clicked() {
+                    cancel = true;
+                }
+            },
+        );
+    });
+    if let Some(s) = &app.scan {
+        if toggle_pause {
+            s.handle.set_paused(!paused);
+        }
+        if cancel {
+            s.handle.cancel();
+        }
+    }
+}
+
 fn status_bar(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
     let Some(scan) = &app.scan else { return };
     let h = &scan.handle;
     let p = h.progress.clone();
-    let (done, paused, elapsed) = (h.is_done(), h.is_paused(), h.elapsed());
-    let mut toggle_pause = false;
-    let mut cancel = false;
+    let elapsed = h.elapsed();
+    let pal = theme::of(ui);
     ui.horizontal_wrapped(|ui| {
-        if !done {
-            if paused {
-                ui.label("⏸");
-            } else {
-                ui.spinner();
-            }
-            ui.label(format!(
-                "Scanning… {} files · {} dirs · {} · {}",
-                p.files.load(Ordering::Relaxed),
-                p.dirs.load(Ordering::Relaxed),
-                app.fmt(p.bytes.load(Ordering::Relaxed)),
+        let root = tree.node(tree.root());
+        ui.label(
+            RichText::new(app.fmt(root.size(app.settings.size_mode)))
+                .display_bold(22.0)
+                .color(pal.ink),
+        );
+        ui.label(theme::muted(
+            ui,
+            format!(
+                "{} items, scanned in {}",
+                group_digits(root.items as u64),
                 crate::util::format_duration(elapsed)
-            ));
-            if ui.button(if paused { "Resume" } else { "Pause" }).clicked() {
-                toggle_pause = true;
-            }
-            if ui.button("Cancel").on_hover_text("Esc").clicked() {
-                cancel = true;
-            }
-        } else {
-            let root = tree.node(tree.root());
-            ui.label(
-                RichText::new(format!(
-                    "{} · {} items · scanned in {}",
-                    app.fmt(root.size(app.settings.size_mode)),
-                    root.items,
-                    crate::util::format_duration(elapsed)
-                ))
-                .strong(),
-            );
-            if p.cancelled.load(Ordering::Relaxed) {
-                ui.label(RichText::new("(partial — cancelled)").weak());
-            }
-            if ui.button("⟳ Rescan").on_hover_text("Ctrl/Cmd+R").clicked() {
-                app.actions.push(Action::Rescan);
-            }
+            ),
+        ));
+        if p.cancelled.load(Ordering::Relaxed) {
+            theme::tag(ui, "Partial: scan was cancelled", pal.warn);
+        }
+        ui.add_space(8.0);
+        if ui.button("⟳ Rescan").on_hover_text("Ctrl/Cmd+R").clicked() {
+            app.actions.push(Action::Rescan);
         }
         if !tree.issues.is_empty()
             && ui
                 .button(
-                    RichText::new(format!("⚠ {} issues", tree.issues.len()))
-                        .color(Color32::from_rgb(230, 160, 20)),
+                    RichText::new(format!("⚠ {} unreadable", tree.issues.len())).color(pal.warn),
                 )
                 .clicked()
         {
@@ -300,14 +397,6 @@ fn status_bar(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
             app.settings_dirty = true;
         }
     });
-    if let Some(s) = &app.scan {
-        if toggle_pause {
-            s.handle.set_paused(!paused);
-        }
-        if cancel {
-            s.handle.cancel();
-        }
-    }
 }
 
 fn breadcrumbs(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
@@ -317,11 +406,12 @@ fn breadcrumbs(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
         v
     };
     let mut go = None;
+    let pal = theme::of(ui);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (i, &id) in chain.iter().enumerate() {
             if i > 0 {
-                ui.label(RichText::new("›").weak());
+                ui.label(RichText::new("›").color(pal.slate));
             }
             let name = if id == Tree::ROOT {
                 let p = tree.root_path();
@@ -334,7 +424,17 @@ fn breadcrumbs(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
                 tree.name_lossy(id)
             };
             let current = id == app.map.center;
-            if ui.selectable_label(current, name).clicked() && !current {
+            let text = if current {
+                RichText::new(name).semibold().color(pal.ink)
+            } else {
+                RichText::new(name).color(pal.accent)
+            };
+            if ui
+                .add(egui::Label::new(text).sense(Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+                && !current
+            {
                 go = Some(id);
             }
         }
@@ -425,7 +525,7 @@ fn chart(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
         .and_then(|id| app.map.layout.find_node(id).copied());
 
     let accent = ui.visuals().selection.stroke.color;
-    let outline = if dark { Color32::WHITE } else { Color32::BLACK };
+    let outline = theme::of(ui).ink;
     if !animating {
         // Search highlights (FR-MAP-14).
         if let Some(sr) = &app.map.search_result {
@@ -450,46 +550,66 @@ fn chart(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
         labels(&painter, &geo, &app.map.layout, tree, &colors);
     }
 
-    // Centre disk.
-    let bg = ui.visuals().panel_fill;
-    painter.circle_filled(geo.center, geo.hole - 2.0, bg);
+    // Centre disk: the current size is the headline figure of the screen.
+    let pal = theme::of(ui);
+    painter.circle_filled(geo.center, geo.hole - 2.0, pal.surface);
+    painter.circle_stroke(geo.center, geo.hole - 2.0, Stroke::new(1.0, pal.line));
     if app.map.hovered_center && app.map.center != Tree::ROOT {
-        painter.circle_stroke(geo.center, geo.hole - 3.0, Stroke::new(2.0, outline));
+        painter.circle_stroke(geo.center, geo.hole - 3.0, Stroke::new(2.0, pal.accent));
     }
-    let (title, size) = match &app.map.hovered {
-        Some(arc) => (arc_name(tree, arc), arc.size),
+    let center_name = |id: NodeId| {
+        if id == Tree::ROOT {
+            let p = tree.root_path();
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.display().to_string())
+        } else {
+            tree.name_lossy(id)
+        }
+    };
+    let center_size = tree.node(app.map.center).size(p.mode).max(1);
+    let (title, size, note) = match &app.map.hovered {
+        Some(arc) => (
+            arc_name(tree, arc),
+            arc.size,
+            format!(
+                "{:.1}% of this folder",
+                arc.size as f64 * 100.0 / center_size as f64
+            ),
+        ),
         None => (
-            if app.map.center == Tree::ROOT {
-                tree.name_lossy(Tree::ROOT)
-            } else {
-                tree.name_lossy(app.map.center)
-            },
+            center_name(app.map.center),
             tree.node(app.map.center).size(p.mode),
+            if app.map.center != Tree::ROOT {
+                "Click to go up".to_string()
+            } else {
+                String::new()
+            },
         ),
     };
-    let text_color = ui.visuals().strong_text_color();
-    let max_chars = ((geo.hole * 2.0 - 16.0) / 7.0).max(4.0) as usize;
+    let figure = (geo.hole * 0.36).clamp(22.0, 52.0);
+    let max_chars = ((geo.hole * 2.0 - 24.0) / 7.5).max(4.0) as usize;
     painter.text(
-        geo.center - Vec2::new(0.0, 10.0),
+        geo.center - Vec2::new(0.0, figure * 0.62 + 4.0),
         egui::Align2::CENTER_CENTER,
         truncate(&title, max_chars),
-        egui::FontId::proportional(13.0),
-        text_color,
+        theme::semibold_font(13.0),
+        pal.slate,
     );
     painter.text(
-        geo.center + Vec2::new(0.0, 10.0),
+        geo.center,
         egui::Align2::CENTER_CENTER,
         app.fmt(size),
-        egui::FontId::proportional(16.0),
-        text_color,
+        theme::display_font(figure),
+        pal.ink,
     );
-    if app.map.center != Tree::ROOT && app.map.hovered.is_none() {
+    if !note.is_empty() {
         painter.text(
-            geo.center + Vec2::new(0.0, 28.0),
+            geo.center + Vec2::new(0.0, figure * 0.62 + 4.0),
             egui::Align2::CENTER_CENTER,
-            "click to go up",
-            egui::FontId::proportional(10.0),
-            ui.visuals().weak_text_color(),
+            note,
+            egui::FontId::proportional(12.0),
+            pal.slate,
         );
     }
 
@@ -637,7 +757,7 @@ fn arc_name(tree: &Tree, arc: &ArcSeg) -> String {
 fn tooltip(app: &App, ui: &mut egui::Ui, tree: &Tree, arc: &ArcSeg) {
     let mode = app.settings.size_mode;
     let parent_size = tree.node(arc.parent).size(mode).max(1);
-    ui.label(RichText::new(arc_name(tree, arc)).strong());
+    ui.label(RichText::new(arc_name(tree, arc)).semibold());
     ui.label(app.fmt(arc.size));
     ui.label(format!(
         "{:.1}% of {}",
@@ -685,7 +805,7 @@ fn tooltip(app: &App, ui: &mut egui::Ui, tree: &Tree, arc: &ArcSeg) {
 
 pub fn context_menu(app: &mut App, ui: &mut egui::Ui, tree: &Tree, n: NodeId) {
     let path = tree.path(n);
-    ui.label(RichText::new(tree.name_lossy(n)).strong());
+    ui.label(RichText::new(tree.name_lossy(n)).semibold());
     ui.separator();
     if ui.button("Reveal in file manager").clicked() {
         app.actions.push(Action::Reveal(path.clone()));
@@ -843,14 +963,18 @@ fn list_panel(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
             (
                 kids,
                 format!(
-                    "{} — {} items",
-                    tree.name_lossy(app.map.center),
-                    tree.node(app.map.center).items
+                    "{} items in {}",
+                    group_digits(tree.node(app.map.center).items as u64),
+                    if app.map.center == Tree::ROOT {
+                        crate::app::path_name(tree.root_path())
+                    } else {
+                        tree.name_lossy(app.map.center)
+                    }
                 ),
             )
         }
     };
-    ui.label(RichText::new(title).strong());
+    ui.label(RichText::new(title).semibold());
     let total = tree.node(app.map.center).size(mode).max(1);
     // The chart's hovered arc, mapped to its ring-1 ancestor for mirroring.
     let chart_hover = app.map.hovered.and_then(|a| a.node).and_then(|n| {
@@ -877,16 +1001,16 @@ fn list_panel(app: &mut App, ui: &mut egui::Ui, tree: &Tree) {
         .column(Column::auto().at_least(80.0))
         .header(20.0, |mut h| {
             h.col(|ui| {
-                ui.strong("Name");
+                theme::column_header(ui, "Name");
             });
             h.col(|ui| {
-                ui.strong("Size");
+                theme::column_header(ui, "Size");
             });
             h.col(|ui| {
-                ui.strong("%");
+                theme::column_header(ui, "%");
             });
             h.col(|ui| {
-                ui.strong("Modified");
+                theme::column_header(ui, "Modified");
             });
         })
         .body(|body| {

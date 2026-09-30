@@ -163,11 +163,14 @@ pub fn start_scan(options: ScanOptions) -> Result<ScanHandle, ScanError> {
         let pause = pause.clone();
         let options = options.clone();
         let roots = ctx_parts.roots;
-        let excluder = ctx_parts.excluder;
+        let bounds = Bounds {
+            excluder: ctx_parts.excluder,
+            sibling_devs: ctx_parts.sibling_devs,
+        };
         std::thread::Builder::new()
             .name("sr-scan".into())
             .spawn(move || {
-                run(&options, roots, excluder, &tree, &progress, &cancel, &pause);
+                run(&options, roots, bounds, &tree, &progress, &cancel, &pause);
                 progress
                     .elapsed_ms
                     .store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
@@ -206,13 +209,29 @@ struct Prepared {
     /// (path, node id in tree, device)
     roots: Vec<(PathBuf, NodeId, Option<u64>)>,
     excluder: Excluder,
+    /// Devices treated as part of the root's filesystem.
+    sibling_devs: Vec<u64>,
 }
 
 fn prepare(options: &ScanOptions) -> Result<Prepared, ScanError> {
     if options.roots.is_empty() {
         return Err(ScanError::NoRoots);
     }
-    let excluder = Excluder::new(&options.exclude_paths, &options.exclude_globs)?;
+    // macOS keeps user data on a separate "Data" volume that is firmlinked
+    // into `/`. A scan of `/` treats that volume as the same disk and skips
+    // its duplicate mount path so nothing is counted twice.
+    let mut exclude_paths = options.exclude_paths.clone();
+    let mut sibling_devs = Vec::new();
+    if cfg!(target_os = "macos") && options.roots.iter().any(|r| r == Path::new("/")) {
+        let data = Path::new("/System/Volumes/Data");
+        if let Ok(m) = std::fs::metadata(data) {
+            if let Some(dev) = sr_platform::entry_meta(data, &m).device {
+                sibling_devs.push(dev);
+                exclude_paths.push(data.to_path_buf());
+            }
+        }
+    }
+    let excluder = Excluder::new(&exclude_paths, &options.exclude_globs)?;
     let mut roots_meta = Vec::new();
     for r in &options.roots {
         let meta = std::fs::metadata(r).map_err(|source| ScanError::Root {
@@ -230,6 +249,7 @@ fn prepare(options: &ScanOptions) -> Result<Prepared, ScanError> {
             tree,
             roots: vec![(path, Tree::ROOT, dev)],
             excluder,
+            sibling_devs,
         })
     } else {
         // Virtual root: children carry absolute paths as names, which
@@ -249,6 +269,7 @@ fn prepare(options: &ScanOptions) -> Result<Prepared, ScanError> {
             tree,
             roots,
             excluder,
+            sibling_devs,
         })
     }
 }
@@ -310,12 +331,19 @@ struct Walker<'a> {
     progress: &'a ScanProgress,
     cancel: &'a CancellationToken,
     pause: &'a PauseToken,
+    sibling_devs: Vec<u64>,
+}
+
+/// What the walk may enter: exclusions and filesystem boundaries.
+struct Bounds {
+    excluder: Excluder,
+    sibling_devs: Vec<u64>,
 }
 
 fn run(
     options: &ScanOptions,
     roots: Vec<(PathBuf, NodeId, Option<u64>)>,
-    excluder: Excluder,
+    bounds: Bounds,
     tree: &Arc<RwLock<Tree>>,
     progress: &ScanProgress,
     cancel: &CancellationToken,
@@ -328,13 +356,14 @@ fn run(
     }
     let walker = Walker {
         options,
-        excluder: &excluder,
+        excluder: &bounds.excluder,
         tx,
         next_token: AtomicU64::new(roots.len() as u64),
         visited: Mutex::new(HashSet::new()),
         progress,
         cancel,
         pause,
+        sibling_devs: bounds.sibling_devs,
     };
 
     let mut builder = std::thread::Builder::new().name("sr-scan-pool".into());
@@ -615,8 +644,9 @@ impl Walker<'_> {
                 info.flags = flags;
                 let other_fs = !self.options.cross_filesystems
                     && root_dev.is_some()
-                    && pm.device.is_some()
-                    && pm.device != root_dev;
+                    && pm
+                        .device
+                        .is_some_and(|d| Some(d) != root_dev && !self.sibling_devs.contains(&d));
                 // Never list the contents of a cloud placeholder directory:
                 // doing so can trigger hydration (FR-SCAN-16).
                 if other_fs || pm.cloud_placeholder {

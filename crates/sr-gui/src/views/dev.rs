@@ -12,6 +12,7 @@ use sr_devsweep::{
 };
 
 use crate::app::{Action, App};
+use crate::theme::{self, Typo};
 use crate::util::{Job, format_age_days, format_date};
 
 pub enum DevMsg {
@@ -46,6 +47,7 @@ pub struct DevState {
     cmd_result: Option<CmdResult>,
     pub express_pending: bool,
     analyzed_once: bool,
+    show_empty: bool,
 }
 
 impl DevState {
@@ -71,6 +73,7 @@ impl DevState {
             cmd_result: None,
             express_pending: false,
             analyzed_once: false,
+            show_empty: false,
         }
     }
 
@@ -199,21 +202,20 @@ pub fn after_execution(app: &mut App, done: &[PathBuf]) {
     app.dev.selected.retain(|p| !set.contains(p));
 }
 
-pub fn risk_color(r: Risk) -> Color32 {
+pub fn risk_color(ui: &egui::Ui, r: Risk) -> Color32 {
+    let p = theme::of(ui);
     match r {
-        Risk::Safe => Color32::from_rgb(0, 158, 115),
-        Risk::Caution => Color32::from_rgb(230, 159, 0),
-        Risk::Review => Color32::from_rgb(213, 94, 0),
+        Risk::Safe => p.ok,
+        Risk::Caution => p.warn,
+        Risk::Review => p.danger,
     }
 }
 
 pub fn risk_tag(ui: &mut egui::Ui, r: Risk, reason: &str) {
-    let text = RichText::new(format!(" {} ", r.label()))
-        .color(Color32::WHITE)
-        .background_color(risk_color(r));
-    let resp = ui.label(text);
+    let c = risk_color(ui, r);
+    let resp = theme::tag(ui, r.label(), c);
     resp.on_hover_ui(|ui| {
-        ui.label(RichText::new(r.label()).strong());
+        ui.label(RichText::new(r.label()).semibold());
         ui.label(r.explanation());
         if !reason.is_empty() {
             ui.label(reason);
@@ -250,7 +252,7 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
         if app.dev.running() {
             ui.spinner();
             ui.label(format!(
-                "{} dirs · {} projects",
+                "{} dirs, {} projects",
                 app.dev.dirs_visited,
                 app.dev.projects.len()
             ));
@@ -258,10 +260,7 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
                 cancel(app);
             }
         } else if ui
-            .add_enabled(
-                !app.dev.roots.is_empty(),
-                egui::Button::new(RichText::new("Analyze").strong()),
-            )
+            .add_enabled(!app.dev.roots.is_empty(), theme::primary(ui, "Analyze"))
             .clicked()
         {
             start(app, &ctx);
@@ -309,6 +308,7 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
         if ui.button("Select none").clicked() {
             app.dev.selected.clear();
         }
+        ui.checkbox(&mut app.dev.show_empty, "Show projects with nothing to clean");
     });
 
     let filter = Filter {
@@ -328,6 +328,7 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
                 .as_ref()
                 .is_none_or(|f| p.path.starts_with(f) || f.starts_with(&p.path))
         })
+        .filter(|p| app.dev.show_empty || !p.artifacts.is_empty())
         .cloned()
         .collect();
 
@@ -350,7 +351,7 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         let total: u64 = visible.iter().map(|p| p.artifact_size).sum();
         ui.label(format!(
-            "{} projects · {} in artifacts",
+            "{} projects, {} in artifacts",
             visible.len(),
             app.fmt(total)
         ));
@@ -364,13 +365,10 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
             let label = if app.settings.dev_express_mode {
                 "Clean selected (express)"
             } else {
-                "Clean selected → Trash Drawer"
+                "Send to Trash Drawer"
             };
             if ui
-                .add_enabled(
-                    !app.dev.selected.is_empty(),
-                    egui::Button::new(RichText::new(label).strong()),
-                )
+                .add_enabled(!app.dev.selected.is_empty(), theme::primary(ui, label))
                 .clicked()
             {
                 let paths: Vec<PathBuf> = app.dev.selected.iter().cloned().collect();
@@ -386,7 +384,7 @@ pub fn view(app: &mut App, ui: &mut egui::Ui) {
                 app.dev.selected.clear();
             }
             ui.label(format!(
-                "{} selected · {}",
+                "{} selected, {}",
                 app.dev.selected.len(),
                 app.fmt(sel_size)
             ));
@@ -434,7 +432,7 @@ fn projects_table(app: &mut App, ui: &mut egui::Ui, visible: &[Project], now: i6
             .header(20.0, |mut h| {
                 for t in ["", "Project", "Type", "Artifacts", "Source", "Last activity", "Last commit", ""] {
                     h.col(|ui| {
-                        ui.strong(t);
+                        theme::column_header(ui, t);
                     });
                 }
             })
@@ -464,7 +462,7 @@ fn projects_table(app: &mut App, ui: &mut egui::Ui, visible: &[Project], now: i6
                                     app.dev.expanded.insert(p.path.clone());
                                 }
                             }
-                            let r = ui.label(RichText::new(&p.name).strong());
+                            let r = ui.label(RichText::new(&p.name).semibold());
                             r.on_hover_text(p.path.display().to_string()).context_menu(|ui| {
                                 if ui.button("Reveal in file manager").clicked() {
                                     app.actions.push(Action::Reveal(p.path.clone()));
@@ -483,7 +481,7 @@ fn projects_table(app: &mut App, ui: &mut egui::Ui, visible: &[Project], now: i6
                             ui.label(p.types.join(", "));
                         });
                         row.col(|ui| {
-                            ui.label(RichText::new(app.fmt(p.artifact_size)).strong());
+                            ui.label(RichText::new(app.fmt(p.artifact_size)).semibold());
                         });
                         row.col(|ui| {
                             ui.label(app.fmt(p.source_size));
@@ -492,7 +490,7 @@ fn projects_table(app: &mut App, ui: &mut egui::Ui, visible: &[Project], now: i6
                             let days = p.inactive_days(now);
                             let stale = p.is_stale(app.dev.inactivity.unwrap_or(app.settings.dev_stale_days), now);
                             let t = RichText::new(format_age_days(days));
-                            ui.label(if stale { t.color(risk_color(Risk::Caution)) } else { t })
+                            ui.label(if stale { t.color(risk_color(ui, Risk::Caution)) } else { t })
                                 .on_hover_text(format!(
                                     "Last source change {} (build outputs and VCS metadata excluded)",
                                     format_date(p.last_source_mtime)
@@ -595,7 +593,7 @@ fn caches_section(app: &mut App, ui: &mut egui::Ui) {
                     app.dev.selected.remove(&c.path);
                 }
             }
-            ui.label(RichText::new(&c.name).strong());
+            ui.label(RichText::new(&c.name).semibold());
             ui.label(app.fmt(c.allocated));
             risk_tag(ui, c.risk, &c.hint);
             ui.label(
@@ -619,7 +617,7 @@ fn docker_section(app: &mut App, ui: &mut egui::Ui) {
     ui.heading("Docker");
     egui::Grid::new("docker").striped(true).show(ui, |ui| {
         for h in ["Type", "Total", "Active", "Size", "Reclaimable", ""] {
-            ui.strong(h);
+            theme::column_header(ui, h);
         }
         ui.end_row();
         for row in &usage.rows {
@@ -655,7 +653,7 @@ fn command_dialogs(app: &mut App, ctx: &egui::Context) {
                 if cancel.clicked() {
                     close = true;
                 }
-                if ui.button(RichText::new("Run").color(ui.visuals().error_fg_color)).clicked() {
+                if ui.add(theme::danger(ui, "Run")).clicked() {
                     let (a, c) = (argv.clone(), cwd.clone());
                     app.dev.cmd_job = Some(Job::spawn(ctx, "cmd", move |tx, _| {
                         let r = match sr_devsweep::run_command(&a, &c) {
