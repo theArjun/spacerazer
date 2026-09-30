@@ -1,0 +1,15 @@
+name: Feature request
+description: Suggest an improvement or a new DevSweep rule
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the problem or the space you want to reclaim.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?

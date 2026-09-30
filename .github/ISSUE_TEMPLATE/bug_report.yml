@@ -1,0 +1,42 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Scan ~/Projects
+        2. Stage node_modules from DevSweep
+        3. …
+  - type: input
+    id: version
+    attributes:
+      label: SpaceRazer version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS, Windows, Linux]
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Tools › Copy diagnostics in the app, then paste here. It contains no file contents.
+      render: text
+  - type: markdown
+    attributes:
+      value: If the bug could delete files the user did not choose, please report it privately instead; see SECURITY.md.
