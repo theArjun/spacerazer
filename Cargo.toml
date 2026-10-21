@@ -28,9 +28,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 clap = { version = "4.6", features = ["derive"] }
 crossbeam-channel = "0.5"
 directories = "6"
-eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence"] }
-egui = "0.36"
-egui_extras = "0.36"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence"] }
+egui = "0.37"
+egui_extras = "0.37"
 globset = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
 image_hasher = "3.1"
