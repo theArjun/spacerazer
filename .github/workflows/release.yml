@@ -48,7 +48,7 @@ jobs:
             exit 1
           fi
       # Full history and tags, so we can tell whether the tag already exists.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: ref
@@ -91,7 +91,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.sha }}
       - name: System libraries for the GUI
@@ -136,7 +136,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
@@ -166,7 +166,7 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
